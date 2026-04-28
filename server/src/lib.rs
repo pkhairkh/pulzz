@@ -550,6 +550,94 @@ fn collect_hybrid_route_dependencies(route: &shared_protocol::HybridRoute) -> Ve
     normalize_dependencies(dependencies)
 }
 
+/// S4.8: Estimate the byte cost of inline definitions carried by a
+/// PredictiveRouteDispatchPayload. These definitions are the "investment"
+/// that causes inflation in the current record but will pay off in future
+/// records that can reference them via compact IDs instead of re-sending
+/// the full definition data.
+///
+/// The estimate is based on the number and size of inline definition
+/// payloads. We use a quick heuristic rather than re-encoding each
+/// definition separately, since the exact cost depends on bincode encoding
+/// details that may vary. The heuristic counts:
+///   - Each assembly definition: ~estimated size based on body node count
+///   - Each schema definition: ~estimated size based on schema field count
+///   - Each dictionary definition: ~estimated size based on entry count
+///   - Each episode hint: ~fixed overhead per hint
+///   - Dependency closure entries: ~fixed overhead per dependency
+fn estimate_definition_investment_bytes(payload: &PredictiveRouteDispatchPayload) -> usize {
+    let mut estimate = 0usize;
+
+    // Inline assembly definitions — these carry the full assembly body
+    // including all nodes, which is the largest definition investment.
+    for assembly_def in &payload.inline_assembly_defs {
+        // Each body node contributes ~64-256 bytes in bincode encoding
+        // (node kind tag + content fields + metadata).
+        let node_estimate = assembly_def.assembly.body.nodes.len() * 128;
+        // Assembly header + metadata overhead.
+        estimate += 64 + node_estimate;
+    }
+
+    // Inline schema definitions — carry schema slots, nodes, edges, and
+    // dependency closures. Variable size depending on schema complexity.
+    for schema_def in &payload.inline_schema_defs {
+        // Schema slots contribute ~32 bytes each in bincode.
+        let slot_estimate = schema_def.schema.slots.len() * 32;
+        // Schema nodes contribute ~64 bytes each.
+        let node_estimate = schema_def.schema.nodes.len() * 64;
+        // Schema edges contribute ~32 bytes each.
+        let edge_estimate = schema_def.schema.edges.len() * 32;
+        // Schema header + metadata overhead.
+        estimate += 64 + slot_estimate + node_estimate + edge_estimate;
+    }
+
+    // Inline dictionary definitions — carry dictionary entries.
+    for dict_def in &payload.inline_dictionaries {
+        // Each dictionary entry contributes ~16-64 bytes.
+        let entry_estimate = dict_def.dictionary.entries.len() * 32;
+        estimate += 32 + entry_estimate;
+    }
+
+    // Inline episode hints — relatively small per-hint overhead.
+    for hint in &payload.inline_episode_hints {
+        // Each hint carries context_hash, lag_bucket, precision_band,
+        // dependencies, and candidates. Estimate based on candidate count.
+        let candidate_estimate = hint.candidates.len() * 32;
+        let dep_estimate = hint.dependencies.len() * 48;
+        estimate += 32 + candidate_estimate + dep_estimate;
+    }
+
+    // Dependency closure entries — each carries object_kind, object_id,
+    // and required_revision. These are typically ~40-80 bytes in bincode.
+    estimate += payload.dependency_closure.len() * 48;
+
+    // The PRG graph itself (if present) is a definition investment — it
+    // establishes reconstruction logic that can be referenced by future
+    // routes. Include its estimated size.
+    if let Some(prg) = &payload.prg {
+        estimate += 32 + prg.nodes.len() * 64;
+    }
+
+    // Hybrid route components include their own definitions.
+    if let Some(hybrid) = &payload.hybrid_route {
+        for component in &hybrid.components {
+            match component {
+                shared_protocol::HybridRouteComponent::SubstrateGraph(graph) => {
+                    estimate += 32 + graph.nodes.len() * 64;
+                }
+                shared_protocol::HybridRouteComponent::Schema(graph) => {
+                    estimate += 32 + graph.nodes.len() * 64;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Ensure at least a minimum estimate so the amortization budget is
+    // never zero (which would reject all inflation).
+    estimate.max(64)
+}
+
 impl ServerState {
     pub fn cache_entry(&self, item_id: ItemId) -> Option<&ServerEntry> {
         self.entries.get(&item_id)
@@ -3094,6 +3182,20 @@ impl ServerState {
         self.persist_assembly(assembly.clone())?;
         let def_payload = AssemblyDefPayload::new(assembly.clone());
         let assembly_ref = shared_protocol::assembly_ref_from_payload(&def_payload);
+        // S4.8: Verify the assembly ref's output_len matches the input.
+        if assembly_ref.output_len as usize != bytes.len() {
+            // The assembly body's output_len doesn't match the original input.
+            // This means the structuralization is buggy — fall back to direct state.
+            return self.emit_direct_state_fallback_data(
+                ctx,
+                item_id,
+                transient_exact_material(source_kind, bytes),
+                ControllerRouteFamily::Assembly,
+                source_kind,
+                None,
+                FallbackReason::AssemblyStructuralizationFailed,
+            );
+        }
         let current_signature = shared_protocol::assembly_reuse_signature(&assembly);
         // S1.1.v3 CONFIRMED-ONLY: Only consider confirmed state for "already synced".
         // If only pending (emitted but not acked), we must carry the inline def
@@ -3671,11 +3773,35 @@ impl ServerState {
         Ok(record)
     }
 
-    /// S4.7: Emit a predictive route with automatic inflation fallback.
-    /// If the encoded predictive payload exceeds the logical content length,
-    /// this falls back to direct-state emission instead of emitting an
-    /// inflated route. The caller must provide the raw literal bytes and
-    /// the route family for the fallback record.
+    /// S4.7 → S4.8: Emit a predictive route with amortization-aware inflation
+    /// fallback. The previous binary check (payload > logical_content) prevented
+    /// definitions from ever being installed, creating a chicken-and-egg problem:
+    /// routes were rejected for inflation, but the definitions they carried
+    /// (which caused the inflation) would have enabled future compact references.
+    ///
+    /// The amortization-aware check computes an **inflation budget** that scales
+    /// with observed reuse patterns from route statistics:
+    ///
+    ///   budget = definition_investment_bytes * amortization_multiplier
+    ///
+    /// Where:
+    ///   - definition_investment_bytes = estimated byte cost of inline definitions
+    ///     (assembly_defs + schema_defs + dictionaries + episode_hints)
+    ///   - amortization_multiplier = max(1.0, observed_successes / BREAK_EVEN_REUSE)
+    ///     This scales the allowed inflation proportional to how many times the
+    ///     route family has been observed to succeed (i.e., its definitions are
+    ///     being reused). A family that has never succeeded gets multiplier 1.0
+    ///     (allow inflation up to the definition cost itself — a single reuse
+    ///     would break even). A family with 10 successes gets multiplier 3.3,
+    ///     allowing more generous inflation since the definitions are clearly
+    ///     being amortized across many records.
+    ///
+    /// The inflation is allowed only when:
+    ///   actual_inflation <= definition_investment_bytes * amortization_multiplier
+    ///
+    /// For small payloads (< 256 bytes logical content), the inflation check is
+    /// skipped entirely since the absolute overhead is bounded and definitions
+    /// enable future prediction reuse regardless.
     fn emit_predictive_route_or_inflation_fallback(
         &mut self,
         ctx: HeaderContext,
@@ -3690,50 +3816,127 @@ impl ServerState {
         // Pre-encode to check inflation before any state mutation.
         let payload_bytes = payload.encode().map_err(ServerError::StateProgram)?;
         let logical_content_len = payload.route_graph.output_len as usize;
-        // S4.7: Inflation fallback. For small payloads (below the minimum
-        // threshold), the PredictiveRouteDispatchPayload metadata overhead
-        // inevitably exceeds the content length, but the absolute overhead
-        // is bounded and the route establishes definitions that enable
-        // future prediction and reuse. Only apply the inflation check for
-        // payloads above the minimum where the overhead becomes wasteful.
+
+        // Small payloads are always allowed — the absolute overhead is bounded
+        // and the route establishes definitions for future reuse.
         const INFLATION_CHECK_MIN_CONTENT_BYTES: usize = 256;
         if logical_content_len >= INFLATION_CHECK_MIN_CONTENT_BYTES
             && payload_bytes.len() > logical_content_len
         {
-            // S4.7: Track inflation in fallback metrics for consolidated reporting.
-            let key = format!(
-                "{:?}/predictive_route_inflation",
-                payload.route_family.route_family()
-            );
-            *self.fallback_metrics.fallback_reasons.entry(key).or_insert(0) += 1;
-            // Record the downgrade for route statistics
-            self.record_direct_state_downgrade(
+            let actual_inflation = payload_bytes.len() - logical_content_len;
+
+            // Estimate the byte cost of inline definitions (the "investment"
+            // that will pay off in future records via compact references).
+            let definition_investment_bytes = estimate_definition_investment_bytes(&payload);
+
+            // Compute amortization multiplier from route statistics.
+            // Routes that have succeeded in the past have installed definitions
+            // that are being reused, so their inflation is amortized.
+            let amortization_multiplier = self.compute_amortization_multiplier(
                 planned_family,
                 source_kind,
                 context_hash,
-                ctx.seq_no.0,
-                FallbackReason::PredictiveRouteInflation,
             );
-            // Emit direct state using the raw literal bytes
-            let block = ExactStateMaterial {
-                source_kind,
-                exact_bytes: exact_bytes.to_vec(),
-            };
-            return self.emit_direct_state_fallback_data(
-                ctx,
-                item_id,
-                block,
-                planned_family,
-                source_kind,
-                context_hash,
-                FallbackReason::PredictiveRouteInflation,
-            );
+
+            let inflation_budget =
+                (definition_investment_bytes as f64 * amortization_multiplier) as usize;
+
+            if actual_inflation <= inflation_budget {
+                // S4.8: Amortization-allowed inflation — the definition investment
+                // is justified by observed reuse. Track this for observability.
+                let key = format!(
+                    "{:?}/amortization_allowed_inflation",
+                    payload.route_family.route_family()
+                );
+                *self.fallback_metrics.fallback_reasons.entry(key).or_insert(0) += 1;
+                // Fall through to emit the predictive route.
+            } else {
+                // Inflation exceeds even the amortization budget — genuinely
+                // wasteful. Fall back to direct state.
+                let key = format!(
+                    "{:?}/predictive_route_inflation",
+                    payload.route_family.route_family()
+                );
+                *self.fallback_metrics.fallback_reasons.entry(key).or_insert(0) += 1;
+                // Record the downgrade for route statistics
+                self.record_direct_state_downgrade(
+                    planned_family,
+                    source_kind,
+                    context_hash,
+                    ctx.seq_no.0,
+                    FallbackReason::PredictiveRouteInflation,
+                );
+                // Emit direct state using the raw literal bytes
+                let block = ExactStateMaterial {
+                    source_kind,
+                    exact_bytes: exact_bytes.to_vec(),
+                };
+                return self.emit_direct_state_fallback_data(
+                    ctx,
+                    item_id,
+                    block,
+                    planned_family,
+                    source_kind,
+                    context_hash,
+                    FallbackReason::PredictiveRouteInflation,
+                );
+            }
         }
-        // No inflation — proceed with normal predictive route emission.
-        // Pass the already-encoded bytes to avoid double encoding.
+        // No inflation or amortization-allowed inflation — proceed with
+        // normal predictive route emission. Pass already-encoded bytes.
         self.emit_predictive_route_record_with_bytes(
             ctx, item_id, record_type, payload, payload_bytes,
         )
+    }
+
+    /// Compute the amortization multiplier for a given route family based on
+    /// observed success patterns in route statistics. The multiplier scales the
+    /// allowed inflation budget proportional to evidence of reuse.
+    ///
+    /// Logic:
+    ///   - Gather all route statistics for the same route_family (regardless of
+    ///     source_kind/context_hash) to get a family-level reuse signal.
+    ///   - multiplier = 1.0 + (total_successes / BREAK_EVEN_REUSE)
+    ///   - Clamped to [1.0, MAX_AMORTIZATION_MULTIPLIER]
+    ///
+    /// A multiplier of 1.0 means "allow inflation up to the definition cost
+    /// itself" (break-even after a single reuse). Higher multipliers mean
+    /// the definitions are clearly being amortized across many records.
+    fn compute_amortization_multiplier(
+        &self,
+        route_family: ControllerRouteFamily,
+        source_kind: shared_protocol::SourceKind,
+        context_hash: Option<ContextHash>,
+    ) -> f64 {
+        /// Number of observed successes required to increase the multiplier by 1.
+        /// With BREAK_EVEN_REUSE = 3, 3 successes → multiplier 2.0, 6 → 3.0, etc.
+        const BREAK_EVEN_REUSE: f64 = 3.0;
+        /// Upper bound on the multiplier to prevent unbounded inflation.
+        const MAX_AMORTIZATION_MULTIPLIER: f64 = 8.0;
+
+        // First, look for an exact match (family + source_kind + context_hash).
+        let exact_key = format!(
+            "{}:{:?}:{:?}",
+            route_family as u8,
+            source_kind,
+            context_hash.map(|v| v.0)
+        );
+        if let Some(stats) = self.route_statistics.get(&exact_key) {
+            let successes = stats.success_count as f64;
+            let multiplier = 1.0 + (successes / BREAK_EVEN_REUSE);
+            return multiplier.min(MAX_AMORTIZATION_MULTIPLIER);
+        }
+
+        // No exact match — aggregate across all entries for this route family.
+        let total_successes: f64 = self
+            .route_statistics
+            .values()
+            .filter(|stats| stats.route_family == route_family)
+            .map(|stats| stats.success_count as f64)
+            .sum();
+
+        let multiplier = 1.0 + (total_successes / BREAK_EVEN_REUSE);
+        multiplier.min(MAX_AMORTIZATION_MULTIPLIER)
     }
 
     fn emit_plain_repair(

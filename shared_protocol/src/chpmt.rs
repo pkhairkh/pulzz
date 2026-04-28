@@ -3352,7 +3352,7 @@ pub fn extract_contiguous_motif_candidates(
             delimiter_role_bits: cue.delimiter_bits,
             slot_role_bits: 0,
         };
-        out.push(build_assembly_candidate(
+        if let Some(candidate) = build_assembly_candidate(
             AssemblyKind::ContiguousMotif,
             role_signature,
             Vec::new(),
@@ -3365,7 +3365,9 @@ pub fn extract_contiguous_motif_candidates(
             len as u32,
             len as u32,
             rolling_assembly_hash(motif),
-        ));
+        ) {
+            out.push(candidate);
+        }
         if out.len() >= 8 {
             break;
         }
@@ -3437,7 +3439,7 @@ pub fn extract_discontinuous_field_group_candidates(
             delimiter_role_bits: cue.delimiter_bits | delimiter_bits_for_bytes(&gap_literal),
             slot_role_bits: left_slot.role_bits | right_slot.role_bits,
         };
-        out.push(build_assembly_candidate(
+        if let Some(candidate) = build_assembly_candidate(
             AssemblyKind::DiscontinuousFieldGroup,
             role_signature,
             vec![left_slot, right_slot],
@@ -3447,7 +3449,9 @@ pub fn extract_discontinuous_field_group_candidates(
             combined_len as u32,
             (combined_len + max_gap) as u32,
             rolling_assembly_hash(left) ^ rolling_assembly_hash(right),
-        ));
+        ) {
+            out.push(candidate);
+        }
         if out.len() >= 8 {
             break;
         }
@@ -3460,6 +3464,14 @@ pub fn extract_delimiter_bounded_candidates(
     bytes: &[u8],
     config: AssemblyExtractionConfig,
 ) -> Vec<AssemblyExtractionCandidate> {
+    // Delimiter-bounded extraction is only meaningful for text and JSON sources
+    // where structural delimiters ({}, [], "", etc.) have semantic meaning.
+    // For binary/image sources, delimiter bytes appear randomly and the
+    // extracted spans have no structural significance, leading to incorrect
+    // reconstruction on the client side.
+    if matches!(source_kind, SourceKind::Binary | SourceKind::Image) {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let mut start = 0usize;
     while start < bytes.len() {
@@ -3469,10 +3481,11 @@ pub fn extract_delimiter_bounded_candidates(
         if start >= bytes.len() {
             break;
         }
-        let delimiter = bytes[start];
+        let open_delimiter = bytes[start];
+        let close_delimiter = matching_close(open_delimiter);
         let segment_start = start + 1;
         let mut end = segment_start;
-        while end < bytes.len() && bytes[end] != delimiter {
+        while end < bytes.len() && bytes[end] != close_delimiter {
             end += 1;
         }
         if end <= bytes.len() {
@@ -3481,31 +3494,33 @@ pub fn extract_delimiter_bounded_candidates(
                 let cue = derive_sparse_cue_from_bytes(source_kind, segment);
                 let role_signature = RoleSignature {
                     role_bits: cue.role_bits,
-                    delimiter_role_bits: cue.delimiter_bits | delimiter_bit(delimiter),
+                    delimiter_role_bits: cue.delimiter_bits | delimiter_bit(open_delimiter),
                     slot_role_bits: 0,
                 };
-                out.push(build_assembly_candidate(
+                if let Some(candidate) = build_assembly_candidate(
                     AssemblyKind::DelimiterBounded,
                     role_signature,
                     Vec::new(),
                     vec![
                         AssemblyBodyNode::DelimiterAnchor {
-                            bytes: vec![delimiter],
+                            bytes: vec![open_delimiter],
                         },
                         AssemblyBodyNode::MotifLink {
                             motif_hash: rolling_assembly_hash(segment),
                             bytes: segment.to_vec(),
                         },
                         AssemblyBodyNode::DelimiterAnchor {
-                            bytes: vec![delimiter],
+                            bytes: vec![close_delimiter],
                         },
                     ],
                     DependencyClosure::default(),
                     cue,
                     (segment.len() + 2) as u32,
                     (segment.len() + 2) as u32,
-                    rolling_assembly_hash(segment) ^ ((delimiter as u64) << 48),
-                ));
+                    rolling_assembly_hash(segment) ^ ((open_delimiter as u64) << 48),
+                ) {
+                    out.push(candidate);
+                }
             }
         }
         start = end.saturating_add(1);
@@ -3596,7 +3611,7 @@ pub fn extract_slot_bearing_candidates(
                     | delimiter_bit(close),
                 slot_role_bits: slots.iter().fold(0_u64, |acc, slot| acc | slot.role_bits),
             };
-            out.push(build_assembly_candidate(
+            if let Some(candidate) = build_assembly_candidate(
                 AssemblyKind::SlotBearing,
                 role_signature,
                 slots,
@@ -3606,7 +3621,9 @@ pub fn extract_slot_bearing_candidates(
                 inner.len() as u32 + 2,
                 inner.len() as u32 + 2,
                 rolling_assembly_hash(inner) ^ ((open as u64) << 56),
-            ));
+            ) {
+                out.push(candidate);
+            }
             cursor = close_idx + 1;
             if out.len() >= 8 {
                 break;
@@ -3786,8 +3803,16 @@ fn build_assembly_candidate(
     canonical_length_min: u32,
     canonical_length_max: u32,
     structural_hash: u64,
-) -> AssemblyExtractionCandidate {
+) -> Option<AssemblyExtractionCandidate> {
     let body = AssemblyBody { nodes };
+    // S4.8: Reject candidates whose body output_len doesn't match the
+    // canonical length range. This catches extraction bugs (delimiter
+    // double-counting, incorrect span boundaries, slot placeholder
+    // miscalculation, etc.) before they produce incorrect wire data.
+    let output_len = body.output_len();
+    if output_len < canonical_length_min || output_len > canonical_length_max {
+        return None;
+    }
     let support_votes = derive_assembly_support_votes(&body, role_signature, &slots);
     let agreement = summarize_assembly_agreement(
         &body,
@@ -3795,7 +3820,7 @@ fn build_assembly_candidate(
         &dependency_closure.dependencies,
         &support_votes,
     );
-    AssemblyExtractionCandidate {
+    Some(AssemblyExtractionCandidate {
         assembly_kind,
         role_signature,
         slots,
@@ -3807,7 +3832,7 @@ fn build_assembly_candidate(
         structural_hash,
         support_votes,
         agreement,
-    }
+    })
 }
 
 pub fn assembly_dependency_fingerprint(dependencies: &[ObjectDependency]) -> u64 {
