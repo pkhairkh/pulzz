@@ -1,0 +1,31 @@
+[package]
+name = "server"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+client = { path = "../client" }
+fastembed = { version = "5.12.0", default-features = false, features = ["hf-hub-native-tls", "ort-download-binaries-native-tls"] }
+futures-util.workspace = true
+indicatif.workspace = true
+rand.workspace = true
+rand_core.workspace = true
+quinn.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+shared_protocol = { path = "../shared_protocol" }
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+thiserror.workspace = true
+url.workspace = true
+webtrans-quinn.workspace = true
+zstd.workspace = true

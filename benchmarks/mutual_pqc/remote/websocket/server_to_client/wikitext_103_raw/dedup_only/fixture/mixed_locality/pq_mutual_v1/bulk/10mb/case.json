@@ -1,0 +1,29 @@
+{
+  "environment": "remote",
+  "carrier": "web_socket",
+  "direction": "server_to_client",
+  "corpus": "wikitext_103_raw",
+  "optimization": {
+    "source_dedup": true,
+    "data_plane_codec": "adaptive"
+  },
+  "provider": "fixture",
+  "workload": "mixed_locality",
+  "protection": "pq_mutual_v1",
+  "mode": "bulk",
+  "target_bytes": {
+    "kind": "ten_mb"
+  },
+  "seed": 17827782483407642234,
+  "stream_id": 12215153877621120635,
+  "bind_addr": "0.0.0.0:9130",
+  "direct_host": "10.42.0.1",
+  "port": 9130,
+  "utility_sample_limit": 256,
+  "remote_ssh_target": "pkhairkh@10.42.0.1",
+  "remote_repo_path": "~/pulzz_remote",
+  "client_runtime": "web_wasm",
+  "input_corpus_fingerprint": "8048a14e1542c3b87ee7ae46f5e0528fd17ac00379212dd43177b32f9b014ba6",
+  "input_corpus_file_count": 24209,
+  "input_corpus_chunk_count": 65538
+}

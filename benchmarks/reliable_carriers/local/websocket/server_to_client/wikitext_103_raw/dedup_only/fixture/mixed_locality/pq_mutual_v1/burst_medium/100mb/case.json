@@ -1,0 +1,29 @@
+{
+  "environment": "local",
+  "carrier": "web_socket",
+  "direction": "server_to_client",
+  "corpus": "wikitext_103_raw",
+  "optimization": {
+    "source_dedup": true,
+    "data_plane_codec": "adaptive"
+  },
+  "provider": "fixture",
+  "workload": "mixed_locality",
+  "protection": "pq_mutual_v1",
+  "mode": "burst_medium",
+  "target_bytes": {
+    "kind": "hundred_mb"
+  },
+  "seed": 17827782483485981170,
+  "stream_id": 12215153877703129587,
+  "bind_addr": "127.0.0.1:0",
+  "direct_host": null,
+  "port": 0,
+  "utility_sample_limit": 256,
+  "remote_ssh_target": null,
+  "remote_repo_path": null,
+  "client_runtime": "native_rust",
+  "input_corpus_fingerprint": "8048a14e1542c3b87ee7ae46f5e0528fd17ac00379212dd43177b32f9b014ba6",
+  "input_corpus_file_count": 24209,
+  "input_corpus_chunk_count": 65538
+}

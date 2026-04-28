@@ -1,0 +1,175 @@
+{
+  "case": {
+    "environment": "local",
+    "carrier": "quic_stream",
+    "direction": "client_to_server",
+    "corpus": "wikitext_103_raw",
+    "optimization": {
+      "source_dedup": true,
+      "data_plane_codec": "adaptive"
+    },
+    "provider": "fixture",
+    "workload": "mixed_locality",
+    "protection": "pq_mutual_v1",
+    "mode": "burst_medium",
+    "target_bytes": {
+      "kind": "hundred_mb"
+    },
+    "seed": 15512932275017546226,
+    "stream_id": 9918318067744176627,
+    "bind_addr": "127.0.0.1:0",
+    "direct_host": null,
+    "port": 0,
+    "utility_sample_limit": 256,
+    "remote_ssh_target": null,
+    "remote_repo_path": null,
+    "client_runtime": "native_rust",
+    "input_corpus_fingerprint": "8048a14e1542c3b87ee7ae46f5e0528fd17ac00379212dd43177b32f9b014ba6",
+    "input_corpus_file_count": 24209,
+    "input_corpus_chunk_count": 65538
+  },
+  "artifact_dir": "benchmarks/reliable_carriers/local/quic_stream/client_to_server/wikitext_103_raw/dedup_only/fixture/mixed_locality/pq_mutual_v1/burst_medium/100mb",
+  "target_payload_bytes": 100000000,
+  "original_payload_bytes": 99702099,
+  "actual_payload_bytes": 100000046,
+  "payload_overshoot_bytes": 46,
+  "protected_wire_bytes": 106764404,
+  "build_profile": "release",
+  "direct_connectivity_verified": true,
+  "sharded": false,
+  "shard_count": 1,
+  "shard_payload_cap_bytes": null,
+  "shard_results": [],
+  "server": {
+    "side": "server",
+    "records": 372308,
+    "vector_records": 297947,
+    "original_payload_bytes": 99702099,
+    "payload_bytes": 100000046,
+    "wire_bytes": 106764404,
+    "throughput": {
+      "total_duration_ms": 140568,
+      "payload_bytes_per_sec": 711397.1776964392,
+      "wire_bytes_per_sec": 759518.6074618648,
+      "records_per_sec": 2648.5873859878616
+    },
+    "process": {
+      "peak_rss_bytes": 220119040,
+      "peak_vsz_bytes": 435428656,
+      "peak_cpu_percent": 101.6,
+      "timeseries_path": "benchmarks/reliable_carriers/local/quic_stream/client_to_server/wikitext_103_raw/dedup_only/fixture/mixed_locality/pq_mutual_v1/burst_medium/100mb/server/timeseries.jsonl"
+    },
+    "codec_modes": {
+      "copy_exact": 297947,
+      "latent_raw": 0,
+      "latent_delta": 0,
+      "control": 74361
+    },
+    "lane_profiles": {
+      "bl0_copy": 297947,
+      "bl16": 0,
+      "bl32": 0,
+      "bl64": 0,
+      "bl128": 0,
+      "other": 0
+    },
+    "source_families": {
+      "text": 297947,
+      "json": 0,
+      "binary": 0,
+      "unknown": 0
+    },
+    "residual_modes": {
+      "none": 297947,
+      "all_zero": 0,
+      "small_signed_rans": 0,
+      "sparse_positions": 0,
+      "literal_raw": 0,
+      "unknown": 0
+    },
+    "encode_latency": null,
+    "embedding_latency": null,
+    "apply_latency": {
+      "samples": 1532,
+      "min_ns": 3917,
+      "avg_ns": 856901.2911227155,
+      "p50_ns": 765750,
+      "p95_ns": 1079709,
+      "p99_ns": 3051167,
+      "max_ns": 21630333
+    },
+    "burst_stats": null,
+    "utility": null,
+    "source_cache": null,
+    "side_result_path": "benchmarks/reliable_carriers/local/quic_stream/client_to_server/wikitext_103_raw/dedup_only/fixture/mixed_locality/pq_mutual_v1/burst_medium/100mb/server/side_result.json"
+  },
+  "client": {
+    "side": "client",
+    "records": 372308,
+    "vector_records": 297947,
+    "original_payload_bytes": 99702099,
+    "payload_bytes": 100000046,
+    "wire_bytes": 106764404,
+    "throughput": {
+      "total_duration_ms": 140568,
+      "payload_bytes_per_sec": 711395.8142231716,
+      "wire_bytes_per_sec": 759517.1517584266,
+      "records_per_sec": 2648.5823096701433
+    },
+    "process": {
+      "peak_rss_bytes": 220119040,
+      "peak_vsz_bytes": 435428656,
+      "peak_cpu_percent": 101.6,
+      "timeseries_path": "benchmarks/reliable_carriers/local/quic_stream/client_to_server/wikitext_103_raw/dedup_only/fixture/mixed_locality/pq_mutual_v1/burst_medium/100mb/client/timeseries.jsonl"
+    },
+    "codec_modes": {
+      "copy_exact": 297947,
+      "latent_raw": 0,
+      "latent_delta": 0,
+      "control": 74361
+    },
+    "lane_profiles": {
+      "bl0_copy": 297947,
+      "bl16": 0,
+      "bl32": 0,
+      "bl64": 0,
+      "bl128": 0,
+      "other": 0
+    },
+    "source_families": {
+      "text": 297947,
+      "json": 0,
+      "binary": 0,
+      "unknown": 0
+    },
+    "residual_modes": {
+      "none": 297947,
+      "all_zero": 0,
+      "small_signed_rans": 0,
+      "sparse_positions": 0,
+      "literal_raw": 0,
+      "unknown": 0
+    },
+    "encode_latency": null,
+    "embedding_latency": null,
+    "apply_latency": null,
+    "burst_stats": {
+      "burst_count": 1532,
+      "total_burst_payload_bytes": 100000046,
+      "max_burst_payload_bytes": 65536,
+      "average_fill_ratio": 0.9960049661581573,
+      "peak_buffered_payload_bytes": 65536,
+      "peak_buffered_frame_count": 271
+    },
+    "utility": null,
+    "source_cache": {
+      "lookups": 297947,
+      "hits": 233636,
+      "misses": 64311,
+      "embeddings_skipped": 233636,
+      "cache_read_ns": 2495358942,
+      "cache_write_ns": 22129610792
+    },
+    "side_result_path": "benchmarks/reliable_carriers/local/quic_stream/client_to_server/wikitext_103_raw/dedup_only/fixture/mixed_locality/pq_mutual_v1/burst_medium/100mb/client/side_result.json"
+  }
+}

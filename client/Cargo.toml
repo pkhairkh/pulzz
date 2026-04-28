@@ -1,0 +1,63 @@
+[package]
+name = "client"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shared_protocol = { path = "../shared_protocol" }
+thiserror.workspace = true
+url.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+quinn.workspace = true
+rustls.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+webtrans-quinn.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+futures-channel = "0.3"
+getrandom = { version = "0.2", features = ["js"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+webtrans-wasm.workspace = true
+web-sys = { version = "0.3", features = [
+  "BinaryType",
+  "Crypto",
+  "CloseEvent",
+  "ErrorEvent",
+  "Event",
+  "CryptoKey",
+  "DomStringList",
+  "IdbDatabase",
+  "IdbFactory",
+  "IdbObjectStore",
+  "IdbOpenDbRequest",
+  "IdbRequest",
+  "IdbTransaction",
+  "IdbTransactionMode",
+  "MessageEvent",
+  "Navigator",
+  "Performance",
+  "ReadableStream",
+  "ReadableStreamDefaultReader",
+  "Response",
+  "SubtleCrypto",
+  "WebSocket",
+  "Window",
+] }
