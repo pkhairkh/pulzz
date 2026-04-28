@@ -2,9 +2,9 @@
 
 ## Scope
 
-Live residual issues in the pulzZ repository after the compatibility-purge / DDD / feature-coherence remediation pass.
+Live residual issues in the pulzZ repository as of Sprint 5 (MemoryAck feedback loop, eval classification fix, P0-P5 compress module scaffolding, amortization-aware inflation check, stable assembly ID).
 
-No local build or test claim is made — the current environment does not provide a Rust toolchain. Code changes are structurally verified via search but not compile-tested.
+All 146 tests pass (78 shared_protocol + 53 server + 15 client).
 
 ## Status summary
 
@@ -19,12 +19,29 @@ What is materially true in the current checkout:
 - dependency checks are revision-aware on both sender and receiver
 - resync semantics are symmetric across client and server
 - transform is **DEMOTED** from active architecture — candidate generation retained for future reactivation but no transform routes are emitted
+- payload encoding uses postcard (compact binary serde), not JSON
+- **P0-P5 compress module is implemented as scaffolding** — `ZstdDictionary`, `BinaryDelta`, `StructuralTemplate`, `ColumnarBatch`, `select_strategy()`, `DictionaryManager`, `TemplateRegistry` are all present and unit-tested
+- server `compress_exact_bytes()` wires P0-P4 into the emission path; standalone eval validates compression round-trips
+- client-side decompression path for compressed payloads needs integration
 - benchmark payload metrics use explicit byte categories
 - zero-valued eval metrics (residual_burden, completion_hit_rate, schema_activation_share, transform_reuse_share) have been removed from eval.rs; transform_reuse_share removed from bench.rs
 - duplicate type aliases and deprecated helper functions have been collapsed
 - transform install/apply record aliases removed; canonical names used throughout
 
-## Open issues
+## Critical issue
+
+### [HIGH] I0. Predictive route planning produces negative wire savings
+
+**Area:** wire efficiency
+**Primary files:** `server/src/lib.rs`, `shared_protocol/src/compress.rs`
+
+The current CHPMT predictive route planning produces negative wire savings (-45%/-27%/-13% across high/mixed/low locality workloads) because every item generates a unique assembly definition that is carried inline. The definitions are never amortized — each item has a different structural hash due to unique step numbers and varying content, so assembly reuse is effectively zero. The amortization-aware inflation check (`estimate_definition_investment_bytes()` with `AMORTIZATION_BREAK_EVEN_REUSE=3`) correctly rejects most inflated routes, but the result is that nearly all routes fall back to direct-state, which carries no compression at all.
+
+The P0-P5 compression pipeline is designed to fix this by replacing the inflation-prone inline assembly approach with direct compression of exact_bytes using zstd dictionaries, delta encoding for updates, and template-based structural encoding. The compress module is implemented and validated in standalone eval, but needs wire protocol integration (dictionary/template/delta transport to the client, client-side decompression).
+
+**Effect:** The "predictive" system is currently just re-encoding without compression. The only path to positive wire savings is completing P0-P5 wire integration.
+
+---
 
 ### [MEDIUM] I1. SourceCache disk writes during measured benchmark execution
 
@@ -72,7 +89,18 @@ The wire types (TransformDef, TransformCorrect) and candidate generation code ar
 
 ---
 
-### [LOW] I4. Schema/Transform dependency revision tracking uses conservative rejection
+### [MEDIUM] I4. P0-P5 compression pipeline not yet integrated into client decompression
+
+**Area:** compression pipeline integration
+**Primary files:** `shared_protocol/src/compress.rs`, `client/src/lib.rs`, `server/src/lib.rs`
+
+The compress module implements P0-P5 primitives and the server's `compress_exact_bytes()` uses them for encoding. However, the client-side decompression path for compressed payloads is incomplete. The `decode_compressed_payload()` function exists but needs integration into the client's record application flow. Additionally, wire protocol support for dictionary/template/delta transport (sending definitions to the client so it can decompress) is not yet implemented.
+
+**Effect:** Compressed payloads are encoded on the server but may not be correctly decoded on the client. The standalone eval validates compression round-trips but the end-to-end path through the wire protocol is untested.
+
+---
+
+### [LOW] I5. Schema/Transform dependency revision tracking uses conservative rejection
 
 **Area:** dependency validation
 **Primary files:** `server/src/lib.rs`, `client/src/lib.rs`
@@ -83,22 +111,11 @@ Schema and transform peer-tracking uses HashSet (no revision storage). When `req
 
 ---
 
-### [LOW] I5. PredictiveRouteDispatchPayload uses JSON encoding
-
-**Area:** wire efficiency
-**Primary files:** `shared_protocol/src/state.rs`
-
-Predictive route dispatch payloads are JSON-encoded, which contributes to payload inflation. When encoded predictive payload exceeds logical content length, the inflation is tracked and the route falls back to direct state.
-
-**Effect:** Some predictive routes that would save wire bytes under binary encoding instead fall back to direct state due to JSON inflation. The inflation detection and fallback mechanism is honest about this.
-
----
-
-### [LOW] I6. End-to-end runtime validation not yet performed
+### [LOW] I6. End-to-end runtime validation not yet performed for compression pipeline
 
 **Area:** validation
 **Primary files:** all
 
-Several correctness improvements (confirmed-only admissibility, transactional inline defs, dependency closure derivation, substrate promotion) are structurally verified in code but have not been runtime-tested with the full system. No Rust toolchain is available in the current environment.
+The P0-P5 compression pipeline is structurally verified in unit tests and standalone eval but has not been runtime-tested through the full client-server wire path. Several correctness improvements (confirmed-only admissibility, transactional inline defs, dependency closure derivation, substrate promotion) are structurally verified in code but have not been runtime-tested with the full system.
 
 **Effect:** Code logic appears correct but may contain integration bugs discoverable only by running the system.

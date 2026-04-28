@@ -837,32 +837,43 @@ This should be implementable on commodity CPU because:
 
 # 22. Migration replacement order
 
-## Phase 0
+## Phase 0 — ✅ DONE
 Delete vector-provider regime entirely.
 
-## Phase 1
+## Phase 1 — ✅ DONE
 Keep exact substrate only as deterministic ground truth.
 
-## Phase 2
+## Phase 2 — ✅ DONE
 Install sparse index and completion layer.
 
-## Phase 3
-Install assembly learning and routing.
+## Phase 3 — ✅ DONE
+Install assembly learning and routing. (Currently produces negative wire savings due to unique inline definitions — see P0-P5 compression pipeline for the fix.)
 
-## Phase 4
-Install transform class induction and wire support.
+## Phase 4 — DEMOTED
+Install transform class induction and wire support. (Transform is demoted — candidate generation retained, no routes emitted. Reactivation requires confirmed transform-class synchronization.)
 
-## Phase 5
+## Phase 5 — ✅ DONE
 Install episodic context graph and continuation prediction.
 
-## Phase 6
+## Phase 6 — ✅ DONE
 Install schema induction and PRG execution.
 
-## Phase 7
-Turn router from reuse-first into prediction-first.
+## Phase 7 — PARTIAL
+Turn router from reuse-first into prediction-first. The route families exist and produce correct wire contracts, but wire savings are negative because inline definitions are never amortized. The router currently falls back to direct-state for most items.
 
-## Phase 8
+## Phase 8 — NOT STARTED
 Enable replay, consolidation, demotion, ontology maintenance.
+
+## Phase 9 (new) — IN PROGRESS
+Install P0-P5 compression pipeline as the primary wire-savings mechanism:
+- P0: Zstd dictionary transport (scaffolding done, wire integration pending)
+- P1: Delta encoding for updates (scaffolding done, wire integration pending)
+- P2: Schema-aware structural templates (scaffolding done, wire integration pending)
+- P3: Format-aware columnar encoding (scaffolding done, batch integration pending)
+- P4: Adaptive strategy selection (implemented, validation pending)
+- P5: CPU optimization (partial — compression tags done, batch AEAD pending)
+
+This phase was added after the original specification. The CHPMT predictive route planning produces negative wire savings because every assembly definition is unique. The compression pipeline compresses exact_bytes directly (bypassing the inflation-prone inline definition approach) and is the primary path to positive wire savings.
 
 ---
 
