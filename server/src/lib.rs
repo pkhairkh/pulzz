@@ -2777,10 +2777,20 @@ impl ServerState {
         source_kind: shared_protocol::SourceKind,
         candidate: &shared_protocol::AssemblyExtractionCandidate,
     ) -> AssemblyId {
+        // S4.8: Assembly ID must be stable across items that share the same
+        // structural pattern, regardless of their specific byte lengths.
+        // The structural_hash captures the shape (literal islands + slot
+        // structure), the role_signature captures slot/delimiter roles, and
+        // source_kind distinguishes text from json from binary.
+        // Including canonical_length_min/max in the ID prevents reuse:
+        // two items with identical structural patterns but different byte
+        // lengths (e.g., "item 4 revision 3..." vs "item 7 revision 6...")
+        // would get different assembly_ids and never share definitions.
+        // Instead, we use the structural_hash as the primary determinant,
+        // with role_signature for disambiguation when two different
+        // structures happen to hash to the same value.
         let mut value = candidate.structural_hash
-            ^ ((source_kind as u64) << 56)
-            ^ ((candidate.canonical_length_min as u64) << 24)
-            ^ (candidate.canonical_length_max as u64);
+            ^ ((source_kind as u64) << 56);
         value ^= candidate.role_signature.role_bits.rotate_left(7);
         value ^= candidate.role_signature.delimiter_role_bits.rotate_left(13);
         value ^= candidate.role_signature.slot_role_bits.rotate_left(29);
@@ -3737,6 +3747,9 @@ impl ServerState {
             );
         }
         // Build the record using the pre-encoded payload_bytes.
+        // Protocol constraint: PredictiveConfirm/PredictiveCorrect records
+        // use CodecMode::None per the wire validation rules. The record_type
+        // itself distinguishes predictive from direct-state routes.
         let record = Record {
             header: RecordHeader {
                 version: shared_protocol::PROTOCOL_VERSION,

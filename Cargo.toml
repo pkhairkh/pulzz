@@ -39,4 +39,4 @@ url = "2.5"
 webtrans-quinn = "0.4.0"
 webtrans-wasm = "0.4.0"
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
-zstd = "0.13"
+zstd = { version = "0.13", features = ["zdict_builder"] }

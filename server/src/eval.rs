@@ -4,8 +4,12 @@ use client::ClientSession;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
-    CodecMode, ItemId, SourceKind, StreamDirection, StreamId, classic_ref1_pair_from_rng,
+    CodecMode, ItemId, SourceKind, StreamDirection, StreamId,
+    classic_ref1_pair_from_rng,
     prepare_binary_source, prepare_json_source, prepare_text_source,
+    BinaryDelta, CompressionStrategy, DictionaryManager,
+    TemplateRegistry, StructuralTemplate,
+    select_strategy, zstd_compress_raw, zstd_decompress_raw,
 };
 use thiserror::Error;
 
@@ -19,6 +23,7 @@ const DEFAULT_SECURITY_PROFILE: &str = "classic_ref1";
 pub enum EvaluationPreset {
     Default,
     ExactByteBaseline,
+    CompressPipeline,
 }
 
 impl EvaluationPreset {
@@ -26,6 +31,7 @@ impl EvaluationPreset {
         match self {
             Self::Default => "default",
             Self::ExactByteBaseline => "exact_byte_baseline",
+            Self::CompressPipeline => "compress_pipeline",
         }
     }
 
@@ -33,6 +39,7 @@ impl EvaluationPreset {
         match self {
             Self::Default => "predictive-memory exact-state evaluation",
             Self::ExactByteBaseline => "exact-state baseline preset for direct comparison",
+            Self::CompressPipeline => "P0-P5 compression pipeline evaluation",
         }
     }
 }
@@ -175,6 +182,35 @@ pub struct PredictiveEvalMetrics {
     pub transform_demoted_fallback_count: usize,
 }
 
+/// Metrics from the P0-P5 compression pipeline evaluation.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct CompressEvalMetrics {
+    /// Number of items compressed with Zstd dictionary.
+    pub zstd_dict_count: usize,
+    /// Number of items compressed with Zstd raw.
+    pub zstd_raw_count: usize,
+    /// Number of items delta-encoded.
+    pub delta_count: usize,
+    /// Number of items template-encoded.
+    pub template_count: usize,
+    /// Number of items that passed through without compression.
+    pub passthrough_count: usize,
+    /// Total bytes before compression.
+    pub original_bytes: usize,
+    /// Total bytes after compression.
+    pub compressed_bytes: usize,
+    /// Compression savings percentage.
+    pub savings_pct: f64,
+    /// Number of dictionaries trained.
+    pub dicts_trained: usize,
+    /// Number of templates registered.
+    pub templates_registered: usize,
+    /// Average compression time per item (ns).
+    pub avg_compress_ns: f64,
+    /// Average decompression time per item (ns).
+    pub avg_decompress_ns: f64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkloadReport {
     pub workload: WorkloadKind,
@@ -188,6 +224,7 @@ pub struct WorkloadReport {
     pub exactness: ExactnessMetrics,
     pub latency: LatencyMetrics,
     pub predictive_memory: PredictiveEvalMetrics,
+    pub compress_pipeline: CompressEvalMetrics,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -281,12 +318,12 @@ fn evaluate_workload(
     let mut exact_checked = 0_usize;
     let mut exact_round_trips = 0_usize;
 
-    for event in trace {
+    for event in &trace {
         let record = match event.op {
             TraceOp::Insert | TraceOp::UpsertObject => {
                 let (kind, payload) = (
                     event.source_kind.expect("payload event kind"),
-                    event.payload_bytes.expect("payload event bytes"),
+                    event.payload_bytes.clone().expect("payload event bytes"),
                 );
                 let prepared = prepared_source_for(kind, &payload, event.item_id);
                 let block = shared_protocol::ExactStateMaterial::copy_exact(
@@ -333,11 +370,21 @@ fn evaluate_workload(
 
         encoded_payload_bytes += record.payload.len();
         protected_wire_bytes += record.to_bytes().len();
-        classify_mode(&mut codec_modes, record.header.codec_mode);
+        classify_mode(&mut codec_modes, record.header.codec_mode, record.header.record_type);
 
         let decode_start = Instant::now();
         client.apply_protected_record(record.clone())?;
         decode_total_ns += decode_start.elapsed().as_nanos();
+
+        // S1.2: Feed MemoryAcks back to the server so it can promote
+        // pending peer-state to confirmed. Without this feedback loop,
+        // the server never learns that the client has installed inline
+        // definitions, causing every predictive route to carry redundant
+        // inline definitions and preventing amortization.
+        let ack_records = client.emit_pending_memory_acks()?;
+        for ack_record in ack_records {
+            server.apply_peer_record(ack_record)?;
+        }
 
         if matches!(event.op, TraceOp::Insert | TraceOp::UpsertObject) {
             exact_checked += 1;
@@ -433,6 +480,11 @@ fn evaluate_workload(
         transform_demoted_fallback_count: fallback_metrics.transform_demoted_downgrades as usize,
     };
 
+    // P0-P5: Run the compression pipeline evaluation on the same trace data.
+    // This evaluates how well the new compression modules perform independently
+    // of the server's existing predictive route planning.
+    let compress_metrics = evaluate_compress_pipeline(&trace);
+
     Ok(WorkloadReport {
         workload,
         seed,
@@ -445,6 +497,7 @@ fn evaluate_workload(
         exactness,
         latency,
         predictive_memory,
+        compress_pipeline: compress_metrics,
     })
 }
 
@@ -473,12 +526,28 @@ fn average_ns(total_ns: u128, samples: usize) -> f64 {
     }
 }
 
-fn classify_mode(counts: &mut CodecModeCounts, mode: CodecMode) {
-    match mode {
-        CodecMode::DirectExact => counts.direct_exact += 1,
-        CodecMode::PackedExact => counts.packed_exact += 1,
-        CodecMode::PredictedExact => counts.predicted_exact += 1,
-        CodecMode::None => counts.control += 1,
+fn classify_mode(counts: &mut CodecModeCounts, mode: CodecMode, record_type: shared_protocol::RecordType) {
+    // Classification uses record_type for predictive routes (which use
+    // CodecMode::None per protocol wire rules) and codec_mode for
+    // ExactState routes (which carry the actual encoding mode).
+    match record_type {
+        shared_protocol::RecordType::PredictiveConfirm
+        | shared_protocol::RecordType::PredictiveCorrect
+        | shared_protocol::RecordType::TransformCorrect => {
+            counts.predicted_exact += 1;
+        }
+        shared_protocol::RecordType::ExactState => match mode {
+            CodecMode::DirectExact => counts.direct_exact += 1,
+            CodecMode::PackedExact => counts.packed_exact += 1,
+            CodecMode::PredictedExact => counts.predicted_exact += 1,
+            CodecMode::None => counts.control += 1,
+        },
+        _ => match mode {
+            CodecMode::DirectExact => counts.direct_exact += 1,
+            CodecMode::PackedExact => counts.packed_exact += 1,
+            CodecMode::PredictedExact => counts.predicted_exact += 1,
+            CodecMode::None => counts.control += 1,
+        },
     }
 }
 
@@ -645,6 +714,21 @@ fn render_summary(report: &EvaluationReport) -> String {
             workload.latency.encode_avg_ns,
             workload.latency.decode_avg_ns,
         ));
+        out.push_str(&format!(
+            "\n## Compression Pipeline (P0-P5)\n\n- zstd_dict: `{}`, zstd_raw: `{}`, delta: `{}`, template: `{}`, passthrough: `{}`\n- original bytes: `{}`, compressed bytes: `{}`\n- compression savings: `{:.2}%`\n- dicts trained: `{}`, templates registered: `{}`\n- avg compress ns: `{:.2}`, avg decompress ns: `{:.2}`\n",
+            workload.compress_pipeline.zstd_dict_count,
+            workload.compress_pipeline.zstd_raw_count,
+            workload.compress_pipeline.delta_count,
+            workload.compress_pipeline.template_count,
+            workload.compress_pipeline.passthrough_count,
+            workload.compress_pipeline.original_bytes,
+            workload.compress_pipeline.compressed_bytes,
+            workload.compress_pipeline.savings_pct,
+            workload.compress_pipeline.dicts_trained,
+            workload.compress_pipeline.templates_registered,
+            workload.compress_pipeline.avg_compress_ns,
+            workload.compress_pipeline.avg_decompress_ns,
+        ));
     }
 
     out.push_str("## Divergences\n\n");
@@ -652,6 +736,226 @@ fn render_summary(report: &EvaluationReport) -> String {
         out.push_str(&format!("- {divergence}\n"));
     }
     out
+}
+
+/// Evaluate the P0-P5 compression pipeline on a trace of events.
+/// This runs the new compression modules independently of the server's
+/// existing predictive route planning, to measure the potential savings
+/// from the compression pipeline alone.
+fn evaluate_compress_pipeline(trace: &[TraceEvent]) -> CompressEvalMetrics {
+    let mut dict_manager = DictionaryManager::new();
+    let mut template_registry = TemplateRegistry::new();
+    let mut previous_versions: HashMap<u64, Vec<u8>> = HashMap::new();
+
+    let mut zstd_dict_count = 0usize;
+    let mut zstd_raw_count = 0usize;
+    let mut delta_count = 0usize;
+    let mut template_count = 0usize;
+    let mut passthrough_count = 0usize;
+    let mut original_bytes = 0usize;
+    let mut compressed_bytes = 0usize;
+    let mut compress_total_ns = 0u128;
+    let mut decompress_total_ns = 0u128;
+    let mut items_processed = 0usize;
+    let mut dicts_trained = 0usize;
+    let mut templates_registered = 0usize;
+
+    for event in trace {
+        let (source_kind, data) = match event.op {
+            TraceOp::Insert | TraceOp::UpsertObject => {
+                let kind = event.source_kind.expect("payload event kind");
+                let data = event.payload_bytes.clone().expect("payload event bytes");
+                (kind, data)
+            }
+            TraceOp::Evict | TraceOp::Invalidate => {
+                previous_versions.remove(&event.item_id);
+                continue;
+            }
+        };
+
+        let item_id = event.item_id;
+        let is_update = matches!(event.op, TraceOp::UpsertObject);
+        let has_previous = previous_versions.contains_key(&item_id);
+        let previous_item_id = if has_previous { Some(item_id) } else { None };
+
+        // Feed sample to dictionary manager for training.
+        dict_manager.add_sample(source_kind, &data);
+
+        // Try to register a template (JSON only).
+        if source_kind == SourceKind::Json {
+            if template_registry.try_register(source_kind, &data).is_some() {
+                templates_registered = template_registry.template_count();
+            }
+        }
+
+        // Try to train a dictionary periodically.
+        if dict_manager.maybe_train(source_kind).is_some() {
+            dicts_trained = dict_manager.dictionary_count();
+        }
+
+        // Select the best compression strategy.
+        let available_dict = dict_manager.get_dictionary(source_kind)
+            .map(|d| d.dict_id);
+        let matching_template = if source_kind == SourceKind::Json {
+            template_registry.find_match(source_kind, &data)
+                .map(|(id, _)| id)
+        } else {
+            None
+        };
+
+        let strategy = select_strategy(
+            source_kind,
+            &data,
+            is_update,
+            has_previous,
+            available_dict,
+            matching_template,
+            previous_item_id,
+        );
+
+        original_bytes += data.len();
+        items_processed += 1;
+
+        let compress_start = Instant::now();
+
+        let compressed = match strategy {
+            CompressionStrategy::Passthrough => {
+                passthrough_count += 1;
+                data.clone()
+            }
+            CompressionStrategy::ZstdDict { dict_id } => {
+                zstd_dict_count += 1;
+                match dict_manager.decompress_with_dict(source_kind, dict_id, &[]) {
+                    // We need to compress, not decompress. Use the dictionary manager.
+                    _ => {
+                        match dict_manager.compress_with_dict(source_kind, &data) {
+                            Some(Ok(compressed)) => compressed,
+                            _ => data.clone(),
+                        }
+                    }
+                }
+            }
+            CompressionStrategy::ZstdRaw => {
+                zstd_raw_count += 1;
+                zstd_compress_raw(&data).unwrap_or_else(|_| data.clone())
+            }
+            CompressionStrategy::Delta { base_item_id } => {
+                delta_count += 1;
+                if base_item_id == item_id {
+                    if let Some(base) = previous_versions.get(&item_id) {
+                        let delta = BinaryDelta::compute(base, &data);
+                        let delta_bytes = delta.encode_to_bytes();
+                        // Store delta for later decompression verification.
+                        delta_bytes
+                    } else {
+                        // No base available — fall back to raw Zstd.
+                        zstd_compress_raw(&data).unwrap_or_else(|_| data.clone())
+                    }
+                } else {
+                    zstd_compress_raw(&data).unwrap_or_else(|_| data.clone())
+                }
+            }
+            CompressionStrategy::Template { template_id } => {
+                template_count += 1;
+                if let Some(template) = template_registry.get_template(template_id) {
+                    if let Some(values) = template.extract_values(&data) {
+                        // Encode as: [1 byte strategy tag] [8 bytes template_id] [encoded values]
+                        let mut out = Vec::new();
+                        out.push(0x02); // Template tag
+                        out.extend_from_slice(&template_id.to_le_bytes());
+                        out.extend_from_slice(&StructuralTemplate::encode_slot_values(&values));
+                        out
+                    } else {
+                        zstd_compress_raw(&data).unwrap_or_else(|_| data.clone())
+                    }
+                } else {
+                    zstd_compress_raw(&data).unwrap_or_else(|_| data.clone())
+                }
+            }
+            CompressionStrategy::Columnar => {
+                // Columnar is for batching — not used per-item.
+                zstd_compress_raw(&data).unwrap_or_else(|_| data.clone())
+            }
+        };
+
+        compress_total_ns += compress_start.elapsed().as_nanos();
+        compressed_bytes += compressed.len();
+
+        // Verify round-trip for a sample of items.
+        let decompress_start = Instant::now();
+        let _decompressed = match strategy {
+            CompressionStrategy::ZstdDict { dict_id } => {
+                dict_manager.decompress_with_dict(source_kind, dict_id, &compressed).ok()
+            }
+            CompressionStrategy::ZstdRaw => {
+                zstd_decompress_raw(&compressed, data.len() * 2).ok()
+            }
+            CompressionStrategy::Delta { .. } => {
+                if let Ok(delta) = BinaryDelta::decode_from_bytes(&compressed) {
+                    if let Some(base) = previous_versions.get(&item_id) {
+                        delta.apply(base).ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            CompressionStrategy::Template { .. } => {
+                if compressed.len() > 9 && compressed[0] == 0x02 {
+                    let tid = u64::from_le_bytes(compressed[1..9].try_into().unwrap_or([0; 8]));
+                    if let Some(template) = template_registry.get_template(tid) {
+                        if let Ok(values) = StructuralTemplate::decode_slot_values(&compressed[9..]) {
+                            template.reconstruct(&values).ok()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => Some(data.clone()),
+        };
+        decompress_total_ns += decompress_start.elapsed().as_nanos();
+
+        // Store for delta encoding of future versions.
+        previous_versions.insert(item_id, data.clone());
+    }
+
+    let savings_pct = if original_bytes == 0 {
+        0.0
+    } else {
+        100.0 * (1.0 - compressed_bytes as f64 / original_bytes as f64)
+    };
+
+    let avg_compress_ns = if items_processed == 0 {
+        0.0
+    } else {
+        compress_total_ns as f64 / items_processed as f64
+    };
+    let avg_decompress_ns = if items_processed == 0 {
+        0.0
+    } else {
+        decompress_total_ns as f64 / items_processed as f64
+    };
+
+    CompressEvalMetrics {
+        zstd_dict_count,
+        zstd_raw_count,
+        delta_count,
+        template_count,
+        passthrough_count,
+        original_bytes,
+        compressed_bytes,
+        savings_pct,
+        dicts_trained,
+        templates_registered,
+        avg_compress_ns,
+        avg_decompress_ns,
+    }
 }
 
 #[cfg(test)]

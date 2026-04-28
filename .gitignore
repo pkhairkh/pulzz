@@ -1,2 +1,9 @@
 target/
 .DS_Store
+benchmarks/eval_debug/
+benchmarks/eval_debug2/
+benchmarks/eval_debug3/
+benchmarks/eval_output/
+--help/
+benchmarks/eval_final/*_trace.json
+benchmarks/eval_fixed/*_trace.json
