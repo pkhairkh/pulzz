@@ -7,3 +7,4 @@ benchmarks/eval_output/
 --help/
 benchmarks/eval_final/*_trace.json
 benchmarks/eval_fixed/*_trace.json
+benchmarks/eval_p05/*_trace.json

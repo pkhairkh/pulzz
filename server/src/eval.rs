@@ -823,21 +823,23 @@ fn evaluate_compress_pipeline(trace: &[TraceEvent]) -> CompressEvalMetrics {
                 passthrough_count += 1;
                 data.clone()
             }
-            CompressionStrategy::ZstdDict { dict_id } => {
+            CompressionStrategy::ZstdDict { dict_id: _ } => {
                 zstd_dict_count += 1;
-                match dict_manager.decompress_with_dict(source_kind, dict_id, &[]) {
-                    // We need to compress, not decompress. Use the dictionary manager.
-                    _ => {
-                        match dict_manager.compress_with_dict(source_kind, &data) {
-                            Some(Ok(compressed)) => compressed,
-                            _ => data.clone(),
-                        }
+                match dict_manager.compress_with_dict(source_kind, &data) {
+                    Some(Ok(compressed)) => {
+                        shared_protocol::encode_compressed_payload(strategy, &compressed)
                     }
+                    _ => data.clone(),
                 }
             }
             CompressionStrategy::ZstdRaw => {
                 zstd_raw_count += 1;
-                zstd_compress_raw(&data).unwrap_or_else(|_| data.clone())
+                match zstd_compress_raw(&data) {
+                    Ok(compressed) if compressed.len() < data.len() => {
+                        shared_protocol::encode_compressed_payload(strategy, &compressed)
+                    }
+                    _ => data.clone(),
+                }
             }
             CompressionStrategy::Delta { base_item_id } => {
                 delta_count += 1;
@@ -845,26 +847,45 @@ fn evaluate_compress_pipeline(trace: &[TraceEvent]) -> CompressEvalMetrics {
                     if let Some(base) = previous_versions.get(&item_id) {
                         let delta = BinaryDelta::compute(base, &data);
                         let delta_bytes = delta.encode_to_bytes();
-                        // Store delta for later decompression verification.
-                        delta_bytes
+                        if delta_bytes.len() < data.len() {
+                            shared_protocol::encode_compressed_payload(strategy, &delta_bytes)
+                        } else {
+                            match zstd_compress_raw(&data) {
+                                Ok(compressed) if compressed.len() < data.len() => {
+                                    shared_protocol::encode_compressed_payload(
+                                        CompressionStrategy::ZstdRaw, &compressed,
+                                    )
+                                }
+                                _ => data.clone(),
+                            }
+                        }
                     } else {
-                        // No base available — fall back to raw Zstd.
-                        zstd_compress_raw(&data).unwrap_or_else(|_| data.clone())
+                        match zstd_compress_raw(&data) {
+                            Ok(compressed) if compressed.len() < data.len() => {
+                                shared_protocol::encode_compressed_payload(
+                                    CompressionStrategy::ZstdRaw, &compressed,
+                                )
+                            }
+                            _ => data.clone(),
+                        }
                     }
                 } else {
-                    zstd_compress_raw(&data).unwrap_or_else(|_| data.clone())
+                    match zstd_compress_raw(&data) {
+                        Ok(compressed) if compressed.len() < data.len() => {
+                            shared_protocol::encode_compressed_payload(
+                                CompressionStrategy::ZstdRaw, &compressed,
+                            )
+                        }
+                        _ => data.clone(),
+                    }
                 }
             }
             CompressionStrategy::Template { template_id } => {
                 template_count += 1;
                 if let Some(template) = template_registry.get_template(template_id) {
                     if let Some(values) = template.extract_values(&data) {
-                        // Encode as: [1 byte strategy tag] [8 bytes template_id] [encoded values]
-                        let mut out = Vec::new();
-                        out.push(0x02); // Template tag
-                        out.extend_from_slice(&template_id.to_le_bytes());
-                        out.extend_from_slice(&StructuralTemplate::encode_slot_values(&values));
-                        out
+                        let slot_bytes = StructuralTemplate::encode_slot_values(&values);
+                        shared_protocol::encode_compressed_payload(strategy, &slot_bytes)
                     } else {
                         zstd_compress_raw(&data).unwrap_or_else(|_| data.clone())
                     }
@@ -883,41 +904,16 @@ fn evaluate_compress_pipeline(trace: &[TraceEvent]) -> CompressEvalMetrics {
 
         // Verify round-trip for a sample of items.
         let decompress_start = Instant::now();
-        let _decompressed = match strategy {
-            CompressionStrategy::ZstdDict { dict_id } => {
-                dict_manager.decompress_with_dict(source_kind, dict_id, &compressed).ok()
-            }
-            CompressionStrategy::ZstdRaw => {
-                zstd_decompress_raw(&compressed, data.len() * 2).ok()
-            }
-            CompressionStrategy::Delta { .. } => {
-                if let Ok(delta) = BinaryDelta::decode_from_bytes(&compressed) {
-                    if let Some(base) = previous_versions.get(&item_id) {
-                        delta.apply(base).ok()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            CompressionStrategy::Template { .. } => {
-                if compressed.len() > 9 && compressed[0] == 0x02 {
-                    let tid = u64::from_le_bytes(compressed[1..9].try_into().unwrap_or([0; 8]));
-                    if let Some(template) = template_registry.get_template(tid) {
-                        if let Ok(values) = StructuralTemplate::decode_slot_values(&compressed[9..]) {
-                            template.reconstruct(&values).ok()
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => Some(data.clone()),
+        let _decompressed = if shared_protocol::starts_with_compression_tag(&compressed) {
+            shared_protocol::decode_compressed_payload(
+                &compressed,
+                &dict_manager,
+                &template_registry,
+                &previous_versions,
+                source_kind,
+            ).ok()
+        } else {
+            Some(data.clone())
         };
         decompress_total_ns += decompress_start.elapsed().as_nanos();
 

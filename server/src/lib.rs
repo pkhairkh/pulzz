@@ -290,6 +290,10 @@ pub struct ServerState {
     consolidation_queue: ConsolidationQueue,
     ontology_state: OntologyState,
     context_governor: ContextTreeGovernor,
+    // P0-P5 compression pipeline state
+    dict_manager: shared_protocol::DictionaryManager,
+    template_registry: shared_protocol::TemplateRegistry,
+    previous_versions: HashMap<u64, Vec<u8>>,
 }
 
 impl Default for ServerState {
@@ -327,6 +331,9 @@ impl Default for ServerState {
             consolidation_queue: ConsolidationQueue::default(),
             ontology_state: OntologyState::default(),
             context_governor: ContextTreeGovernor::default(),
+            dict_manager: shared_protocol::DictionaryManager::default(),
+            template_registry: shared_protocol::TemplateRegistry::default(),
+            previous_versions: HashMap::new(),
         }
     }
 }
@@ -639,6 +646,149 @@ fn estimate_definition_investment_bytes(payload: &PredictiveRouteDispatchPayload
 }
 
 impl ServerState {
+    /// P0-P5: Compress exact_bytes using the adaptive compression pipeline.
+    /// Feeds samples to the dictionary manager, trains dictionaries if possible,
+    /// selects the best strategy, and returns the compressed bytes wrapped with
+    /// a self-describing compression tag.
+    fn compress_exact_bytes(
+        &mut self,
+        source_kind: shared_protocol::SourceKind,
+        item_id: ItemId,
+        exact_bytes: &[u8],
+    ) -> Vec<u8> {
+        // Feed sample to dictionary manager for training.
+        self.dict_manager.add_sample(source_kind, exact_bytes);
+
+        // Try to register a template (JSON only).
+        if source_kind == shared_protocol::SourceKind::Json {
+            self.template_registry.try_register(source_kind, exact_bytes);
+        }
+
+        // Try to train a dictionary periodically.
+        self.dict_manager.maybe_train(source_kind);
+
+        // Select the best compression strategy.
+        let available_dict = self.dict_manager.get_dictionary(source_kind)
+            .map(|d| d.dict_id);
+        let matching_template = if source_kind == shared_protocol::SourceKind::Json {
+            self.template_registry.find_match(source_kind, exact_bytes)
+                .map(|(id, _)| id)
+        } else {
+            None
+        };
+        let is_update = self.previous_versions.contains_key(&item_id.0);
+        let previous_item_id = if is_update { Some(item_id.0) } else { None };
+
+        let strategy = shared_protocol::select_strategy(
+            source_kind,
+            exact_bytes,
+            is_update,
+            is_update,
+            available_dict,
+            matching_template,
+            previous_item_id,
+        );
+
+        // Apply the compression strategy.
+        // Returns (actual_strategy, compressed_data) so the tag matches
+        // the actual encoding used (strategy may be downgraded on fallback).
+        let (actual_strategy, compressed_data) = match strategy {
+            shared_protocol::CompressionStrategy::Passthrough => {
+                (strategy, exact_bytes.to_vec())
+            }
+            shared_protocol::CompressionStrategy::ZstdDict { .. } => {
+                match self.dict_manager.compress_with_dict(source_kind, exact_bytes) {
+                    Some(Ok(compressed)) => (strategy, compressed),
+                    _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                }
+            }
+            shared_protocol::CompressionStrategy::ZstdRaw => {
+                match shared_protocol::zstd_compress_raw(exact_bytes) {
+                    Ok(compressed) if compressed.len() < exact_bytes.len() => (strategy, compressed),
+                    _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                }
+            }
+            shared_protocol::CompressionStrategy::Delta { base_item_id } => {
+                if base_item_id == item_id.0 {
+                    if let Some(base) = self.previous_versions.get(&item_id.0) {
+                        let delta = shared_protocol::BinaryDelta::compute(base, exact_bytes);
+                        let delta_bytes = delta.encode_to_bytes();
+                        if delta_bytes.len() < exact_bytes.len() {
+                            (strategy, delta_bytes)
+                        } else {
+                            // Delta is larger — fall back to Zstd raw.
+                            match shared_protocol::zstd_compress_raw(exact_bytes) {
+                                Ok(compressed) if compressed.len() < exact_bytes.len() => {
+                                    (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
+                                }
+                                _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                            }
+                        }
+                    } else {
+                        match shared_protocol::zstd_compress_raw(exact_bytes) {
+                            Ok(compressed) if compressed.len() < exact_bytes.len() => {
+                                (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
+                            }
+                            _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                        }
+                    }
+                } else {
+                    match shared_protocol::zstd_compress_raw(exact_bytes) {
+                        Ok(compressed) if compressed.len() < exact_bytes.len() => {
+                            (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
+                        }
+                        _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                    }
+                }
+            }
+            shared_protocol::CompressionStrategy::Template { template_id } => {
+                if let Some(template) = self.template_registry.get_template(template_id) {
+                    if let Some(values) = template.extract_values(exact_bytes) {
+                        let encoded = shared_protocol::StructuralTemplate::encode_slot_values(&values);
+                        if encoded.len() < exact_bytes.len() {
+                            (strategy, encoded)
+                        } else {
+                            match shared_protocol::zstd_compress_raw(exact_bytes) {
+                                Ok(compressed) if compressed.len() < exact_bytes.len() => {
+                                    (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
+                                }
+                                _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                            }
+                        }
+                    } else {
+                        match shared_protocol::zstd_compress_raw(exact_bytes) {
+                            Ok(compressed) if compressed.len() < exact_bytes.len() => {
+                                (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
+                            }
+                            _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                        }
+                    }
+                } else {
+                    match shared_protocol::zstd_compress_raw(exact_bytes) {
+                        Ok(compressed) if compressed.len() < exact_bytes.len() => {
+                            (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
+                        }
+                        _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                    }
+                }
+            }
+            shared_protocol::CompressionStrategy::Columnar => {
+                match shared_protocol::zstd_compress_raw(exact_bytes) {
+                    Ok(compressed) if compressed.len() < exact_bytes.len() => {
+                        (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
+                    }
+                    _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                }
+            }
+        };
+
+        // Store previous version for delta encoding.
+        self.previous_versions.insert(item_id.0, exact_bytes.to_vec());
+
+        // Wrap with self-describing compression tag using the actual strategy.
+        shared_protocol::encode_compressed_payload(actual_strategy, &compressed_data)
+    }
+
     pub fn cache_entry(&self, item_id: ItemId) -> Option<&ServerEntry> {
         self.entries.get(&item_id)
     }
@@ -3604,12 +3754,20 @@ impl ServerState {
             &runtime_material.exact_bytes,
             shared_protocol::ObjectKind::ExactState,
         );
+        // P0-P5: Compress the exact_bytes before encoding into the record payload.
+        // The server-side state (runtime_object, entries, predictors) keeps
+        // uncompressed data for correct route planning and predictor comparison.
+        // Only the wire payload is compressed.
+        let compressed_bytes = self.compress_exact_bytes(source_kind, item_id, &runtime_material.exact_bytes);
         let encoded = encode_best_runtime_object_payload_with_preference(
             runtime_object.source_kind,
             runtime_object.object_kind,
-            runtime_object.runtime_exact_bytes(),
-            predictor_state,
-            predictor.map(|entry| entry.exact_bytes()),
+            &compressed_bytes,
+            // Use Empty predictor state for compressed payload encoding since
+            // the predictor stores uncompressed bytes and residual computation
+            // against compressed data would be incorrect.
+            shared_protocol::PredictorState::Empty,
+            None,
             DataPlaneCodecPreference::DirectExactOnly,
         )
         .map_err(ServerError::Codec)?;
@@ -3668,8 +3826,12 @@ impl ServerState {
         }
         .validate()
         .map_err(ServerError::Validation)?;
+        // P0-P5: Override the encoded runtime_object with the uncompressed version.
+        // The encoded payload contains compressed bytes, but the server's internal
+        // state (entries, predictors) must store uncompressed data for correct
+        // route planning, cue computation, and predictor comparison.
         let entry = ServerEntry {
-            object: encoded.runtime_object,
+            object: runtime_object,
         };
         let cue = self
             .source_bindings

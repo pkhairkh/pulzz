@@ -1198,6 +1198,7 @@ impl CompressedPayload {
 
 /// Dictionary manager that maintains trained Zstd dictionaries per source
 /// kind and accumulates samples for periodic retraining.
+#[derive(Debug)]
 pub struct DictionaryManager {
     /// Currently active dictionaries, keyed by (source_kind, dict_id).
     dictionaries: HashMap<(SourceKind, u64), ZstdDictionary>,
@@ -1331,6 +1332,7 @@ impl Default for DictionaryManager {
 }
 
 /// Template registry that maintains structural templates per source kind.
+#[derive(Debug)]
 pub struct TemplateRegistry {
     templates: HashMap<u64, StructuralTemplate>,
     /// Maps skeleton_hash → template_id for fast matching.
@@ -1433,6 +1435,193 @@ impl Default for TemplateRegistry {
 }
 
 // ---------------------------------------------------------------------------
+// Self-describing compressed payload wrapper
+// ---------------------------------------------------------------------------
+
+/// Magic prefix for compressed payloads: two bytes [0xC0, 0xMP] where the
+/// second byte encodes the compression type. This two-byte prefix is
+/// extremely unlikely to appear at the start of natural data, avoiding
+/// false positives when checking whether a payload is compressed.
+const COMPRESSION_MAGIC: u8 = 0xC0;
+
+/// Tag byte (second byte after magic) prepended to compressed payloads so
+/// the receiver knows which decompressor to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompressionTag {
+    /// No compression — raw bytes follow.
+    Passthrough = 0x00,
+    /// Zstd dictionary compression — [0xC0][0x01][dict_id:8][zstd_data].
+    ZstdDict = 0x01,
+    /// Zstd raw compression — [0xC0][0x02][zstd_data].
+    ZstdRaw = 0x02,
+    /// Binary delta — [0xC0][0x03][base_item_id:8][delta_encoded].
+    Delta = 0x03,
+    /// Template encoding — [0xC0][0x04][template_id:8][slot_values].
+    Template = 0x04,
+}
+
+impl CompressionTag {
+    /// Try to convert a raw byte to a CompressionTag.
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0x00 => Some(CompressionTag::Passthrough),
+            0x01 => Some(CompressionTag::ZstdDict),
+            0x02 => Some(CompressionTag::ZstdRaw),
+            0x03 => Some(CompressionTag::Delta),
+            0x04 => Some(CompressionTag::Template),
+            _ => None,
+        }
+    }
+
+    /// Convert to a raw byte.
+    pub fn to_byte(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Encode a compressed payload with its self-describing two-byte prefix.
+///
+/// The wire format uses a two-byte magic prefix [0xC0][tag] followed by
+/// strategy-specific data. The 0xC0 magic byte avoids false positives
+/// with SourceKind tag values (1-4) used by the old packed payload format.
+///
+/// Wire formats:
+/// - Passthrough: [0xC0][0x00][raw_bytes]
+/// - ZstdDict:    [0xC0][0x01][dict_id:8][zstd_data]
+/// - ZstdRaw:     [0xC0][0x02][zstd_data]
+/// - Delta:       [0xC0][0x03][base_item_id:8][delta_encoded]
+/// - Template:    [0xC0][0x04][template_id:8][slot_values]
+pub fn encode_compressed_payload(
+    strategy: CompressionStrategy,
+    compressed_data: &[u8],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + 8 + compressed_data.len());
+    // Two-byte magic prefix to avoid collision with SourceKind tags.
+    out.push(COMPRESSION_MAGIC);
+    match strategy {
+        CompressionStrategy::Passthrough => {
+            out.push(CompressionTag::Passthrough.to_byte());
+            out.extend_from_slice(compressed_data);
+        }
+        CompressionStrategy::ZstdDict { dict_id } => {
+            out.push(CompressionTag::ZstdDict.to_byte());
+            out.extend_from_slice(&dict_id.to_le_bytes());
+            out.extend_from_slice(compressed_data);
+        }
+        CompressionStrategy::ZstdRaw => {
+            out.push(CompressionTag::ZstdRaw.to_byte());
+            out.extend_from_slice(compressed_data);
+        }
+        CompressionStrategy::Delta { base_item_id } => {
+            out.push(CompressionTag::Delta.to_byte());
+            out.extend_from_slice(&base_item_id.to_le_bytes());
+            out.extend_from_slice(compressed_data);
+        }
+        CompressionStrategy::Template { template_id } => {
+            out.push(CompressionTag::Template.to_byte());
+            out.extend_from_slice(&template_id.to_le_bytes());
+            out.extend_from_slice(compressed_data);
+        }
+        CompressionStrategy::Columnar => {
+            // Columnar is for batching; fall back to passthrough for single items.
+            out.push(CompressionTag::Passthrough.to_byte());
+            out.extend_from_slice(compressed_data);
+        }
+    }
+    out
+}
+
+/// Decode a self-describing compressed payload.
+///
+/// Returns the decompressed bytes. Requires the client's DictionaryManager
+/// and TemplateRegistry for ZstdDict, Delta, and Template decompression.
+/// The `previous_versions` map is used for delta decoding (maps item_id → previous raw bytes).
+pub fn decode_compressed_payload(
+    payload: &[u8],
+    dict_manager: &DictionaryManager,
+    template_registry: &TemplateRegistry,
+    previous_versions: &HashMap<u64, Vec<u8>>,
+    source_kind: SourceKind,
+) -> Result<Vec<u8>, CompressError> {
+    if payload.len() < 2 {
+        return Err(CompressError::CompressedPayloadTruncated {
+            minimum: 2,
+            actual: payload.len(),
+        });
+    }
+
+    // Verify the magic prefix byte.
+    if payload[0] != COMPRESSION_MAGIC {
+        return Err(CompressError::InvalidCompressionTag(payload[0]));
+    }
+
+    let tag_byte = payload[1];
+    let tag = CompressionTag::from_byte(tag_byte)
+        .ok_or_else(|| CompressError::InvalidCompressionTag(tag_byte))?;
+
+    // Data starts after the two-byte magic+tag prefix.
+    let data = &payload[2..];
+
+    match tag {
+        CompressionTag::Passthrough => {
+            Ok(data.to_vec())
+        }
+        CompressionTag::ZstdDict => {
+            if data.len() < 8 {
+                return Err(CompressError::CompressedPayloadTruncated {
+                    minimum: 2 + 8,
+                    actual: payload.len(),
+                });
+            }
+            let dict_id = u64::from_le_bytes(data[0..8].try_into().unwrap());
+            dict_manager.decompress_with_dict(source_kind, dict_id, &data[8..])
+        }
+        CompressionTag::ZstdRaw => {
+            let max_size = 10 * 1024 * 1024; // 10 MB safety limit
+            zstd_decompress_raw(data, max_size)
+        }
+        CompressionTag::Delta => {
+            if data.len() < 8 {
+                return Err(CompressError::CompressedPayloadTruncated {
+                    minimum: 2 + 8,
+                    actual: payload.len(),
+                });
+            }
+            let base_item_id = u64::from_le_bytes(data[0..8].try_into().unwrap());
+            let delta_data = &data[8..];
+            let delta = BinaryDelta::decode_from_bytes(delta_data)?;
+            let base = previous_versions.get(&base_item_id)
+                .ok_or(CompressError::DeltaBaseNotFound { base_item_id })?;
+            delta.apply(base)
+        }
+        CompressionTag::Template => {
+            if data.len() < 8 {
+                return Err(CompressError::CompressedPayloadTruncated {
+                    minimum: 2 + 8,
+                    actual: payload.len(),
+                });
+            }
+            let template_id = u64::from_le_bytes(data[0..8].try_into().unwrap());
+            let slot_data = &data[8..];
+            let template = template_registry.get_template(template_id)
+                .ok_or(CompressError::TemplateNotFound { template_id })?;
+            let values = StructuralTemplate::decode_slot_values(slot_data)?;
+            template.reconstruct(&values)
+        }
+    }
+}
+
+/// Check if a byte slice starts with the compression magic prefix [0xC0].
+/// This avoids false positives with SourceKind tag values (1-4) used by
+/// the old packed payload format, since 0xC0 is never a valid SourceKind.
+pub fn starts_with_compression_tag(data: &[u8]) -> bool {
+    if data.len() < 2 {
+        return false;
+    }
+    data[0] == COMPRESSION_MAGIC && CompressionTag::from_byte(data[1]).is_some()
+}
+
+// ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
 
@@ -1475,6 +1664,14 @@ pub enum CompressError {
         source_kind: SourceKind,
         dict_id: u64,
     },
+    #[error("invalid compression tag: {0}")]
+    InvalidCompressionTag(u8),
+    #[error("compressed payload truncated: minimum={minimum}, actual={actual}")]
+    CompressedPayloadTruncated { minimum: usize, actual: usize },
+    #[error("delta base not found: base_item_id={base_item_id}")]
+    DeltaBaseNotFound { base_item_id: u64 },
+    #[error("template not found: template_id={template_id}")]
+    TemplateNotFound { template_id: u64 },
 }
 
 #[cfg(test)]

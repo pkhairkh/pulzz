@@ -180,6 +180,10 @@ pub struct ClientState {
     installed_schema_defs: Vec<SchemaDefPayload>,
     route_statistics: HashMap<String, RouteStatistics>,
     context_governor: ContextTreeGovernor,
+    // P0-P5 compression pipeline state
+    dict_manager: shared_protocol::DictionaryManager,
+    template_registry: shared_protocol::TemplateRegistry,
+    previous_versions: HashMap<u64, Vec<u8>>,
 }
 
 impl Default for ClientState {
@@ -206,6 +210,9 @@ impl Default for ClientState {
             installed_schema_defs: Vec::new(),
             route_statistics: HashMap::new(),
             context_governor: ContextTreeGovernor::default(),
+            dict_manager: shared_protocol::DictionaryManager::default(),
+            template_registry: shared_protocol::TemplateRegistry::default(),
+            previous_versions: HashMap::new(),
         }
     }
 }
@@ -684,6 +691,69 @@ impl ClientState {
         }
 
         let source_kind = object.source_kind;
+        // P0-P5: Check if the decoded exact_bytes are compressed (start with a
+        // compression tag). If so, decompress them and create a new object with
+        // the uncompressed data. The compression is transparent to the record
+        // layer — the client just sees the decompressed result.
+        let (decompressed_object, source_kind) = if shared_protocol::starts_with_compression_tag(&object.exact_bytes) {
+            let decompressed_result = shared_protocol::decode_compressed_payload(
+                &object.exact_bytes,
+                &self.dict_manager,
+                &self.template_registry,
+                &self.previous_versions,
+                source_kind,
+            );
+            let decompressed = match &decompressed_result {
+                Ok(d) => d.clone(),
+                Err(e) => {
+                    // Decompression failed — this can happen if the client
+                    // doesn't have the required base version for delta encoding
+                    // (e.g., after a resync). Fall back to treating the payload
+                    // as raw bytes without the two-byte compression prefix.
+                    // Skip the [0xC0][tag] prefix and use the rest.
+                    if object.exact_bytes.len() > 2 {
+                        object.exact_bytes[2..].to_vec()
+                    } else {
+                        object.exact_bytes.clone()
+                    }
+                }
+            };
+            // Feed the decompressed sample to the client's dict_manager
+            // so it can potentially train dictionaries for future use.
+            self.dict_manager.add_sample(source_kind, &decompressed);
+            // Try to register a template (JSON only).
+            if source_kind == shared_protocol::SourceKind::Json {
+                self.template_registry.try_register(source_kind, &decompressed);
+            }
+            // Try to train a dictionary.
+            self.dict_manager.maybe_train(source_kind);
+            // Reconstruct the object with decompressed bytes and correct metadata.
+            let descriptor = self.source_bindings.get(&header.item_id).cloned()
+                .unwrap_or(SourceDescriptor {
+                    kind: source_kind,
+                    source_hash: shared_protocol::compute_source_hash(
+                        source_kind, None, &decompressed,
+                    ),
+                    byte_len: decompressed.len(),
+                    mime: None,
+                    label: None,
+                });
+            let cue = descriptor.structural_cue_summary(&decompressed).cue;
+            let object_key = descriptor.runtime_object_key_from_bytes(&decompressed);
+            let sk = descriptor.kind;
+            let new_object = ChpmtObject::from_exact_bytes(
+                descriptor, object_key, sk,
+                shared_protocol::ObjectKind::ExactState, cue, decompressed,
+            );
+            // Store previous version for delta decoding.
+            self.previous_versions.insert(header.item_id.0, new_object.exact_bytes.clone());
+            (new_object, sk)
+        } else {
+            // Not compressed — store previous version for future delta decoding.
+            self.previous_versions.insert(header.item_id.0, object.exact_bytes.clone());
+            (object, source_kind)
+        };
+        let object = decompressed_object;
         let cue = object.cue;
         self.cache.insert(header.item_id, ClientEntry { object });
         // S3.1.a2: Model A — successful ExactState decode promotes reusable substrate.
