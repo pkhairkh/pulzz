@@ -10,6 +10,7 @@ use shared_protocol::{
     BinaryDelta, CompressionStrategy, DictionaryManager,
     TemplateRegistry, StructuralTemplate,
     select_strategy, zstd_compress_raw, zstd_decompress_raw,
+    RecordFlags, RecordType,
 };
 use thiserror::Error;
 
@@ -153,6 +154,16 @@ pub struct ByteMetrics {
     pub payload_savings_vs_original_pct: f64,
     pub wire_savings_vs_original_pct: f64,
     pub wire_overhead_vs_encoded_pct: f64,
+    /// P0: How many records were zstd-compressed at the record level.
+    pub records_zstd_compressed: usize,
+    /// P0: How many records were NOT compressed (too small or incompressible).
+    pub records_not_compressed: usize,
+    /// P0: Total bytes saved by zstd compression at the record level.
+    pub zstd_savings_bytes: usize,
+    /// P0: Total bytes of payloads before zstd compression.
+    pub pre_zstd_payload_bytes: usize,
+    /// P0: Total bytes of payloads after zstd compression.
+    pub post_zstd_payload_bytes: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -317,6 +328,12 @@ fn evaluate_workload(
     let mut decode_total_ns = 0_u128;
     let mut exact_checked = 0_usize;
     let mut exact_round_trips = 0_usize;
+    // P0: Track zstd compression at the record level.
+    let mut records_zstd_compressed = 0_usize;
+    let mut records_not_compressed = 0_usize;
+    let mut zstd_savings_bytes = 0_usize;
+    let mut pre_zstd_payload_bytes = 0_usize;
+    let mut post_zstd_payload_bytes = 0_usize;
 
     for event in &trace {
         let record = match event.op {
@@ -370,6 +387,22 @@ fn evaluate_workload(
 
         encoded_payload_bytes += record.payload.len();
         protected_wire_bytes += record.to_bytes().len();
+        // P0: Track record-level zstd compression stats.
+        let is_zstd_compressed = record.header.flags.contains(
+            shared_protocol::RecordFlags::PAYLOAD_ZSTD
+        ) || record.header.flags.contains(
+            shared_protocol::RecordFlags::PAYLOAD_ZSTD_DICT
+        );
+        if is_zstd_compressed {
+            records_zstd_compressed += 1;
+            // Note: Cannot decompress the protected record for diagnostic
+            // because the payload is AEAD-encrypted. The PAYLOAD_ZSTD flag
+            // is visible in the header (AAD), but the payload itself is
+            // encrypted. Compression savings are reflected in the reduced
+            // payload_len of the encrypted record.
+        } else {
+            records_not_compressed += 1;
+        }
         classify_mode(&mut codec_modes, record.header.codec_mode, record.header.record_type);
 
         let decode_start = Instant::now();
@@ -415,6 +448,92 @@ fn evaluate_workload(
         original_payload_bytes,
         encoded_payload_bytes,
         protected_wire_bytes,
+        records_zstd_compressed,
+        records_not_compressed,
+        zstd_savings_bytes,
+        pre_zstd_payload_bytes,
+        post_zstd_payload_bytes,
+    );
+    let latency = LatencyMetrics {
+        encode_total_ns,
+        encode_avg_ns: average_ns(
+            encode_total_ns,
+            payload_event_count + codec_modes.control as usize,
+        ),
+        decode_total_ns,
+        decode_avg_ns: average_ns(
+            decode_total_ns,
+            payload_event_count + codec_modes.control as usize,
+        ),
+    };
+    let exactness = ExactnessMetrics {
+        checked_events: exact_checked,
+        exact_round_trips,
+        exact_round_trip_rate: if exact_checked == 0 {
+            1.0
+        } else {
+            exact_round_trips as f64 / exact_checked as f64
+        },
+    };
+    let route_stats = server.state().route_statistics().collect::<Vec<_>>();
+    let total_route_events = route_stats
+        .iter()
+        .map(|stat| u64::from(stat.success_count + stat.failure_count))
+        .sum::<u64>()
+        .max(1) as f64;
+    let mut route_family_share = HashMap::new();
+    for family in [
+        shared_protocol::ControllerRouteFamily::DirectState,
+        shared_protocol::ControllerRouteFamily::ExactAtom,
+        shared_protocol::ControllerRouteFamily::Assembly,
+        shared_protocol::ControllerRouteFamily::Transform,
+        shared_protocol::ControllerRouteFamily::EpisodeCompletion,
+        shared_protocol::ControllerRouteFamily::SchemaExpansion,
+        shared_protocol::ControllerRouteFamily::Hybrid,
+    ] {
+        let family_events = route_stats
+            .iter()
+            .filter(|stat| stat.route_family == family)
+            .map(|stat| u64::from(stat.success_count + stat.failure_count))
+            .sum::<u64>() as f64;
+        if family_events > 0.0 {
+            route_family_share.insert(
+                format!("{}", family as u8),
+                family_events / total_route_events,
+            );
+        }
+    }
+    let fallback_metrics = server.state().fallback_metrics();
+    let predictive_memory = PredictiveEvalMetrics {
+        route_family_share,
+        sync_risk_fallback_count: 0,
+        exact_atom_direct_state_fallback_count: fallback_metrics
+            .direct_state_downgrades
+            .get(&format!(
+                "{}",
+                shared_protocol::ControllerRouteFamily::ExactAtom as u8
+            ))
+            .copied()
+            .unwrap_or(0) as usize,
+        transform_demoted_fallback_count: fallback_metrics.transform_demoted_downgrades as usize,
+    };
+
+    // P0-P5: Run the compression pipeline evaluation on the same trace data.
+    // This evaluates how well the new compression modules perform independently
+    // of the server's existing predictive route planning.
+    let compress_metrics = evaluate_compress_pipeline(&trace);
+
+    // P0: Read server-side compression metrics (before AEAD protection).
+    let server_comp = server.state().compression_metrics();
+    let bytes = summarize_bytes(
+        original_payload_bytes,
+        encoded_payload_bytes,
+        protected_wire_bytes,
+        records_zstd_compressed,
+        records_not_compressed,
+        server_comp.savings_bytes,
+        server_comp.pre_compress_bytes,
+        server_comp.post_compress_bytes,
     );
     let latency = LatencyMetrics {
         encode_total_ns,
@@ -505,6 +624,11 @@ fn summarize_bytes(
     original_payload_bytes: usize,
     encoded_payload_bytes: usize,
     protected_wire_bytes: usize,
+    records_zstd_compressed: usize,
+    records_not_compressed: usize,
+    zstd_savings_bytes: usize,
+    pre_zstd_payload_bytes: usize,
+    post_zstd_payload_bytes: usize,
 ) -> ByteMetrics {
     let original = original_payload_bytes.max(1) as f64;
     let encoded = encoded_payload_bytes.max(1) as f64;
@@ -515,6 +639,11 @@ fn summarize_bytes(
         payload_savings_vs_original_pct: 100.0 * (1.0 - encoded_payload_bytes as f64 / original),
         wire_savings_vs_original_pct: 100.0 * (1.0 - protected_wire_bytes as f64 / original),
         wire_overhead_vs_encoded_pct: 100.0 * (protected_wire_bytes as f64 / encoded - 1.0),
+        records_zstd_compressed,
+        records_not_compressed,
+        zstd_savings_bytes,
+        pre_zstd_payload_bytes,
+        post_zstd_payload_bytes,
     }
 }
 
@@ -707,6 +836,15 @@ fn render_summary(report: &EvaluationReport) -> String {
             workload.bytes.payload_savings_vs_original_pct,
             workload.bytes.wire_savings_vs_original_pct,
             workload.bytes.wire_overhead_vs_encoded_pct,
+        ));
+        out.push_str(&format!(
+            "- P0 record zstd: `{}` compressed, `{}` not compressed, `{}` bytes saved\n- P0 pre-zstd payload: `{}`, post-zstd payload: `{}`, record zstd savings: `{:.2}%`\n",
+            workload.bytes.records_zstd_compressed,
+            workload.bytes.records_not_compressed,
+            workload.bytes.zstd_savings_bytes,
+            workload.bytes.pre_zstd_payload_bytes,
+            workload.bytes.post_zstd_payload_bytes,
+            if workload.bytes.pre_zstd_payload_bytes == 0 { 0.0 } else { 100.0 * workload.bytes.zstd_savings_bytes as f64 / workload.bytes.pre_zstd_payload_bytes as f64 },
         ));
         out.push_str(&format!(
             "- exact round-trip rate: `{:.6}`\n- avg encode ns: `{:.2}`\n- avg decode ns: `{:.2}`\n\n",
@@ -970,7 +1108,7 @@ mod tests {
 
     #[test]
     fn byte_metrics_report_savings_consistently() {
-        let metrics = summarize_bytes(100, 60, 72);
+        let metrics = summarize_bytes(100, 60, 72, 0, 0, 0, 0, 0);
         assert!((metrics.payload_savings_vs_original_pct - 40.0).abs() < 1e-6);
         assert!((metrics.wire_savings_vs_original_pct - 28.0).abs() < 1e-6);
         assert!((metrics.wire_overhead_vs_encoded_pct - 20.0).abs() < 1e-6);

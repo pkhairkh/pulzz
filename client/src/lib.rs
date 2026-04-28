@@ -1194,6 +1194,16 @@ impl ClientState {
     }
 
     fn apply_predictive_dispatch_record(&mut self, record: Record) -> Result<(), ClientApplyError> {
+        // P0: Decompress the payload if it's Zstd-compressed. The server
+        // compresses PredictiveRouteDispatchPayload.encode() output with Zstd
+        // before putting it into the record. We decompress here before
+        // passing it to the bincode decoder.
+        let record = record.maybe_decompress_zstd()
+            .map_err(|e| ClientApplyError::StateWire(
+                shared_protocol::StateProgramError::PredictiveDispatchSerialization(
+                    format!("zstd decompression failed: {e}")
+                )
+            ))?;
         let header = record.header;
         let payload = match PredictiveRouteDispatchPayload::decode(&record.payload) {
             Ok(payload) => payload,

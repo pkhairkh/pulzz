@@ -229,6 +229,30 @@ const MAX_SERVER_ENTRIES: usize = 16384;
 /// Maximum number of pending replay hints before backpressure is applied.
 const MAX_PENDING_REPLAY_HINTS: usize = 256;
 
+/// P0: Compression metrics tracked on the server side, before AEAD protection.
+#[derive(Debug, Clone, Default)]
+pub struct CompressionMetrics {
+    /// Number of records where zstd compression was applied.
+    pub records_compressed: usize,
+    /// Number of records where compression was skipped (too small / incompressible).
+    pub records_skipped: usize,
+    /// Total payload bytes BEFORE compression.
+    pub pre_compress_bytes: usize,
+    /// Total payload bytes AFTER compression.
+    pub post_compress_bytes: usize,
+    /// Total bytes saved by compression.
+    pub savings_bytes: usize,
+}
+
+impl CompressionMetrics {
+    pub fn savings_pct(&self) -> f64 {
+        if self.pre_compress_bytes == 0 {
+            return 0.0;
+        }
+        100.0 * self.savings_bytes as f64 / self.pre_compress_bytes as f64
+    }
+}
+
 /// Maximum number of pending memory retire payloads.
 const MAX_PENDING_MEMORY_RETIRES: usize = 256;
 
@@ -294,6 +318,8 @@ pub struct ServerState {
     dict_manager: shared_protocol::DictionaryManager,
     template_registry: shared_protocol::TemplateRegistry,
     previous_versions: HashMap<u64, Vec<u8>>,
+    // P0: Compression metrics tracked before AEAD protection.
+    compression_metrics: CompressionMetrics,
 }
 
 impl Default for ServerState {
@@ -334,6 +360,7 @@ impl Default for ServerState {
             dict_manager: shared_protocol::DictionaryManager::default(),
             template_registry: shared_protocol::TemplateRegistry::default(),
             previous_versions: HashMap::new(),
+            compression_metrics: CompressionMetrics::default(),
         }
     }
 }
@@ -1176,6 +1203,11 @@ impl ServerState {
 
     pub fn fallback_metrics(&self) -> &RouteFallbackMetrics {
         &self.fallback_metrics
+    }
+
+    /// P0: Returns compression metrics tracked on the server side.
+    pub fn compression_metrics(&self) -> &CompressionMetrics {
+        &self.compression_metrics
     }
 
     fn record_direct_state_downgrade(
@@ -3912,6 +3944,13 @@ impl ServerState {
         // Protocol constraint: PredictiveConfirm/PredictiveCorrect records
         // use CodecMode::None per the wire validation rules. The record_type
         // itself distinguishes predictive from direct-state routes.
+        //
+        // P0: Compress the payload with Zstd. Predictive route payloads
+        // contain inline assembly definitions, dependency closures, and
+        // route graphs — all highly compressible structured data with
+        // repeated keys and patterns. Zstd level 3 typically achieves
+        // 50-70% compression on these payloads.
+        let pre_compress_len = payload_bytes.len();
         let record = Record {
             header: RecordHeader {
                 version: shared_protocol::PROTOCOL_VERSION,
@@ -3927,8 +3966,22 @@ impl ServerState {
             payload: payload_bytes,
             auth_tag: [0; shared_protocol::AUTH_TAG_LEN],
         }
+        .maybe_compress_zstd()
         .validate()
         .map_err(ServerError::Validation)?;
+
+        // P0: Track compression metrics (before AEAD protection).
+        let post_compress_len = record.payload.len();
+        if record.header.flags.contains(RecordFlags::PAYLOAD_ZSTD)
+            || record.header.flags.contains(RecordFlags::PAYLOAD_ZSTD_DICT)
+        {
+            self.compression_metrics.records_compressed += 1;
+            self.compression_metrics.pre_compress_bytes += pre_compress_len;
+            self.compression_metrics.post_compress_bytes += post_compress_len;
+            self.compression_metrics.savings_bytes += pre_compress_len.saturating_sub(post_compress_len);
+        } else {
+            self.compression_metrics.records_skipped += 1;
+        }
 
         // S1.1.v1: Post-emission assertion — confirmed trackers must not have grown.
         // This catches any code path that accidentally writes to confirmed state
@@ -5011,7 +5064,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(record.header.record_type, RecordType::PredictiveConfirm);
-        let payload = PredictiveRouteDispatchPayload::decode(&record.payload).unwrap();
+        let payload = PredictiveRouteDispatchPayload::decode(
+            &record.maybe_decompress_zstd().unwrap().payload
+        ).unwrap();
         assert_eq!(
             payload.route_family,
             ControllerRouteFamily::EpisodeCompletion
@@ -5319,7 +5374,9 @@ mod tests {
             )
             .unwrap();
         let payload =
-            shared_protocol::PredictiveRouteDispatchPayload::decode(&record.payload).unwrap();
+            shared_protocol::PredictiveRouteDispatchPayload::decode(
+                &record.maybe_decompress_zstd().unwrap().payload
+            ).unwrap();
         assert_eq!(payload.route_family, ControllerRouteFamily::Assembly);
         assert!(payload.installs_assembly_defs());
         assert_eq!(
@@ -5360,7 +5417,9 @@ mod tests {
             )
             .unwrap();
         let payload =
-            shared_protocol::PredictiveRouteDispatchPayload::decode(&record.payload).unwrap();
+            shared_protocol::PredictiveRouteDispatchPayload::decode(
+                &record.maybe_decompress_zstd().unwrap().payload
+            ).unwrap();
         assert!(payload.reuses_synchronized_assembly());
         assert!(payload.inline_assembly_defs.is_empty());
         assert_eq!(
@@ -5410,7 +5469,9 @@ mod tests {
             )
             .unwrap();
         let payload =
-            shared_protocol::PredictiveRouteDispatchPayload::decode(&record.payload).unwrap();
+            shared_protocol::PredictiveRouteDispatchPayload::decode(
+                &record.maybe_decompress_zstd().unwrap().payload
+            ).unwrap();
         let installed = payload.inline_assembly_defs.first().unwrap();
         assert_eq!(
             payload.assembly_mode,

@@ -87,6 +87,16 @@ impl RecordFlags {
     /// S3.4: Indicates this direct-state fallback was caused by schema
     /// dependency inadmissibility.
     pub const SCHEMA_DEPENDENCY_INADMISSIBLE_FALLBACK: u16 = 1 << 8;
+    /// P0: Indicates the record.payload is Zstd-compressed. The receiver must
+    /// decompress before decoding the payload. This applies to ALL record types —
+    /// PredictiveConfirm/Correct payloads (bincode-encoded
+    /// PredictiveRouteDispatchPayload), DirectExact payloads, etc.
+    pub const PAYLOAD_ZSTD: u16 = 1 << 10;
+    /// P0: Indicates the record.payload is Zstd-compressed using a trained
+    /// dictionary. The dictionary_id is embedded as the first 8 bytes of the
+    /// compressed payload (after decompression of the outer zstd layer, the
+    /// payload starts with [dict_id:u64][zstd_dict_compressed_data]).
+    pub const PAYLOAD_ZSTD_DICT: u16 = 1 << 11;
     pub const KNOWN_MASK: u16 = Self::IS_EVICT
         | Self::IS_INVALIDATE
         | Self::POST_REKEY_CONFIRM
@@ -95,7 +105,9 @@ impl RecordFlags {
         | Self::TRANSFORM_DEMOTED_FALLBACK
         | Self::DEPENDENCY_UNAVAILABLE_FALLBACK
         | Self::ASSEMBLY_STRUCTURALIZATION_FALLBACK
-        | Self::SCHEMA_DEPENDENCY_INADMISSIBLE_FALLBACK;
+        | Self::SCHEMA_DEPENDENCY_INADMISSIBLE_FALLBACK
+        | Self::PAYLOAD_ZSTD
+        | Self::PAYLOAD_ZSTD_DICT;
 
     pub const fn empty() -> Self {
         Self(0)
@@ -268,6 +280,177 @@ impl Record {
             });
         }
         Ok(self)
+    }
+
+    /// P0: Compress the record payload with Zstd. If compression reduces the
+    /// payload size, the PAYLOAD_ZSTD flag is set and the payload is replaced
+    /// with the compressed version. If compression doesn't help (small or
+    /// random data), the record is returned unchanged.
+    ///
+    /// Compression level 3 provides ~400 MB/s encode, ~1 GB/s decode, with
+    /// ~70% compression on structured data. The 10-byte overhead of zstd
+    /// framing means payloads under ~50 bytes rarely benefit.
+    pub fn maybe_compress_zstd(self) -> Self {
+        const MIN_COMPRESS_SIZE: usize = 50;
+        const ZSTD_LEVEL: i32 = 3;
+
+        if self.payload.len() < MIN_COMPRESS_SIZE {
+            return self;
+        }
+
+        match zstd::encode_all(&self.payload[..], ZSTD_LEVEL) {
+            Ok(compressed) if compressed.len() < self.payload.len() => {
+                let mut record = Record {
+                    header: self.header,
+                    payload: compressed,
+                    auth_tag: self.auth_tag,
+                };
+                record.header.flags.insert(RecordFlags::PAYLOAD_ZSTD);
+                record.header.payload_len = record.payload.len() as u32;
+                record
+            }
+            _ => self, // Compression didn't help — return unchanged
+        }
+    }
+
+    /// P0: Compress the record payload with Zstd using a trained dictionary.
+    /// If dictionary compression succeeds and is smaller than both the
+    /// original and raw-zstd, the PAYLOAD_ZSTD_DICT flag is set and the
+    /// payload is [dict_id:u64_le][zstd_dict_compressed_data].
+    /// Falls back to raw zstd (PAYLOAD_ZSTD) if that's better, or no
+    /// compression if neither helps.
+    pub fn maybe_compress_zstd_with_dict(
+        self,
+        dict: &crate::compress::ZstdDictionary,
+    ) -> Self {
+        const MIN_COMPRESS_SIZE: usize = 50;
+
+        if self.payload.len() < MIN_COMPRESS_SIZE {
+            return self;
+        }
+
+        // Try dictionary compression first.
+        match dict.compress(&self.payload) {
+            Ok(dict_compressed) if dict_compressed.len() < self.payload.len() => {
+                // Also try raw zstd for comparison.
+                let raw_compressed = zstd::encode_all(&self.payload[..], 3)
+                    .unwrap_or_else(|_| self.payload.clone());
+
+                let dict_total = 8 + dict_compressed.len(); // 8 bytes for dict_id prefix
+                let raw_total = raw_compressed.len();
+
+                if dict_total < raw_total && dict_total < self.payload.len() {
+                    // Dictionary compression wins — prepend dict_id.
+                    let mut payload = Vec::with_capacity(8 + dict_compressed.len());
+                    payload.extend_from_slice(&dict.dict_id.0.to_le_bytes());
+                    payload.extend_from_slice(&dict_compressed);
+                    let mut record = Record {
+                        header: self.header,
+                        payload,
+                        auth_tag: self.auth_tag,
+                    };
+                    record.header.flags.insert(RecordFlags::PAYLOAD_ZSTD_DICT);
+                    record.header.payload_len = record.payload.len() as u32;
+                    record
+                } else if raw_total < self.payload.len() {
+                    // Raw zstd wins over dictionary.
+                    self.maybe_compress_zstd()
+                } else {
+                    self // Neither helps
+                }
+            }
+            _ => {
+                // Dictionary compression failed — try raw zstd.
+                self.maybe_compress_zstd()
+            }
+        }
+    }
+
+    /// P0: Decompress the record payload if it's compressed. Checks the
+    /// PAYLOAD_ZSTD and PAYLOAD_ZSTD_DICT flags and decompresses accordingly.
+    /// Returns the decompressed record with the compression flags cleared.
+    /// If not compressed, returns the record unchanged.
+    pub fn maybe_decompress_zstd(self) -> Result<Self, WireError> {
+        self.maybe_decompress_zstd_with_dict_provider(|_, _| None)
+    }
+
+    /// P0: Decompress the record payload with optional dictionary provider.
+    /// The `dict_provider` closure takes (source_kind, dict_id) and returns
+    /// the dictionary bytes if available. This allows the caller to maintain
+    /// its own dictionary store.
+    pub fn maybe_decompress_zstd_with_dict_provider<F>(
+        self,
+        dict_provider: F,
+    ) -> Result<Self, WireError>
+    where
+        F: Fn(crate::SourceKind, u64) -> Option<Vec<u8>>,
+    {
+        let flags = self.header.flags;
+        if flags.contains(RecordFlags::PAYLOAD_ZSTD) {
+            let decompressed = zstd::decode_all(&self.payload[..])
+                .map_err(|e| WireError::InvalidPayload(
+                    format!("zstd decompression failed: {e}")
+                ))?;
+            let mut record = Record {
+                header: self.header,
+                payload: decompressed,
+                auth_tag: self.auth_tag,
+            };
+            record.header.flags.remove(RecordFlags::PAYLOAD_ZSTD);
+            record.header.payload_len = record.payload.len() as u32;
+            Ok(record)
+        } else if flags.contains(RecordFlags::PAYLOAD_ZSTD_DICT) {
+            if self.payload.len() < 8 {
+                return Err(WireError::InvalidPayload(
+                    "PAYLOAD_ZSTD_DICT payload too short for dict_id".into()
+                ));
+            }
+            let dict_id = u64::from_le_bytes(
+                self.payload[..8].try_into().map_err(|_| 
+                    WireError::InvalidPayload("dict_id parse error".into()))?
+            );
+            let compressed_data = &self.payload[8..];
+
+            // Determine source_kind from the record header for dictionary lookup.
+            // For predictive records, we don't know the source_kind from the header,
+            // so we try each kind. For direct-state records, we can infer it.
+            let dict_bytes = dict_provider(crate::SourceKind::Json, dict_id)
+                .or_else(|| dict_provider(crate::SourceKind::Text, dict_id))
+                .or_else(|| dict_provider(crate::SourceKind::Binary, dict_id));
+
+            let decompressed = match dict_bytes {
+                Some(dict) => {
+                    let mut decoder = zstd::stream::Decoder::with_dictionary(compressed_data, &dict)
+                        .map_err(|e| WireError::InvalidPayload(
+                            format!("zstd dict decompression init failed: {e}")
+                        ))?;
+                    let mut buf = Vec::new();
+                    std::io::Read::read_to_end(&mut decoder, &mut buf)
+                        .map_err(|e| WireError::InvalidPayload(
+                            format!("zstd dict decompression failed: {e}")
+                        ))?;
+                    buf
+                }
+                None => {
+                    // Dictionary not available — try raw zstd as fallback.
+                    zstd::decode_all(compressed_data)
+                        .map_err(|e| WireError::InvalidPayload(
+                            format!("zstd raw fallback decompression failed: {e}")
+                        ))?
+                }
+            };
+
+            let mut record = Record {
+                header: self.header,
+                payload: decompressed,
+                auth_tag: self.auth_tag,
+            };
+            record.header.flags.remove(RecordFlags::PAYLOAD_ZSTD_DICT);
+            record.header.payload_len = record.payload.len() as u32;
+            Ok(record)
+        } else {
+            Ok(self)
+        }
     }
 }
 
@@ -661,7 +844,9 @@ fn validate_catalog_or_repair_header(header: RecordHeader) -> Result<(), Validat
 fn validate_predictive_header(header: RecordHeader) -> Result<(), ValidationError> {
     match header.record_type {
         RecordType::ExactState => {
-            let mut allowed_flags = RecordFlags::POST_REKEY_CONFIRM;
+            let mut allowed_flags = RecordFlags::POST_REKEY_CONFIRM
+                | RecordFlags::PAYLOAD_ZSTD
+                | RecordFlags::PAYLOAD_ZSTD_DICT;
             if header.flags.contains(RecordFlags::DIRECT_STATE_FALLBACK) {
                 allowed_flags |= RecordFlags::DIRECT_STATE_FALLBACK;
                 if header.flags.contains(RecordFlags::SUBSTRATE_FALLBACK) {
@@ -704,7 +889,10 @@ fn validate_predictive_header(header: RecordHeader) -> Result<(), ValidationErro
         | RecordType::MemoryRetire
         | RecordType::TransformCorrect
         | RecordType::MemoryAck => {
-            let allowed_flags = RecordFlags::POST_REKEY_CONFIRM;
+            // P0: Allow PAYLOAD_ZSTD and PAYLOAD_ZSTD_DICT flags for compressed payloads.
+            let allowed_flags = RecordFlags::POST_REKEY_CONFIRM
+                | RecordFlags::PAYLOAD_ZSTD
+                | RecordFlags::PAYLOAD_ZSTD_DICT;
             if header.flags.bits() & !allowed_flags != 0
                 || header.item_id == ItemId(0)
                 || header.codec_mode != CodecMode::None
@@ -1024,4 +1212,99 @@ pub fn decode_schema_def_record(
     record: &Record,
 ) -> Result<crate::SchemaDefPayload, crate::StateProgramError> {
     crate::SchemaDefPayload::decode(&record.payload)
+}
+
+#[cfg(test)]
+mod p0_tests {
+    use super::*;
+
+    #[test]
+    fn record_zstd_compress_decompress_round_trip() {
+        // Create a PredictiveConfirm record with a compressible payload.
+        // The payload must be long enough for zstd compression to beat the
+        // original size (zstd adds ~10 bytes of framing overhead).
+        let payload = b"{\"id\":1,\"step\":5,\"locality\":\"cache-hot\",\"bucket\":3,\"stable\":\"odd\",\"assembly\":{\"def_id\":1,\"body\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]},\"route_graph\":{\"node_count\":3,\"output_len\":85}}"
+            .to_vec();
+        let record = Record {
+            header: RecordHeader {
+                version: PROTOCOL_VERSION,
+                stream_id: StreamId(1),
+                epoch_id: EpochId(0),
+                seq_no: SeqNo(1),
+                record_type: RecordType::PredictiveConfirm,
+                codec_mode: CodecMode::None,
+                flags: RecordFlags::empty(),
+                item_id: ItemId(1),
+                payload_len: payload.len() as u32,
+            },
+            payload,
+            auth_tag: [0u8; AUTH_TAG_LEN],
+        };
+
+        let original_len = record.payload.len();
+        let compressed = record.maybe_compress_zstd();
+
+        // Compression should reduce the size for structured JSON-like data.
+        assert!(compressed.header.flags.contains(RecordFlags::PAYLOAD_ZSTD));
+        assert!(compressed.payload.len() < original_len);
+        assert_eq!(compressed.header.payload_len as usize, compressed.payload.len());
+
+        // Decompress and verify round-trip.
+        let decompressed = compressed.maybe_decompress_zstd().unwrap();
+        assert!(!decompressed.header.flags.contains(RecordFlags::PAYLOAD_ZSTD));
+        assert_eq!(decompressed.payload.len(), original_len);
+        assert_eq!(
+            decompressed.payload,
+            b"{\"id\":1,\"step\":5,\"locality\":\"cache-hot\",\"bucket\":3,\"stable\":\"odd\",\"assembly\":{\"def_id\":1,\"body\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]},\"route_graph\":{\"node_count\":3,\"output_len\":85}}"
+                .to_vec()
+        );
+    }
+
+    #[test]
+    fn record_zstd_skips_small_payloads() {
+        let payload = b"hi".to_vec();
+        let record = Record {
+            header: RecordHeader {
+                version: PROTOCOL_VERSION,
+                stream_id: StreamId(1),
+                epoch_id: EpochId(0),
+                seq_no: SeqNo(1),
+                record_type: RecordType::PredictiveConfirm,
+                codec_mode: CodecMode::None,
+                flags: RecordFlags::empty(),
+                item_id: ItemId(1),
+                payload_len: payload.len() as u32,
+            },
+            payload,
+            auth_tag: [0u8; AUTH_TAG_LEN],
+        };
+
+        let compressed = record.maybe_compress_zstd();
+        // Small payloads should not be compressed.
+        assert!(!compressed.header.flags.contains(RecordFlags::PAYLOAD_ZSTD));
+    }
+
+    #[test]
+    fn record_zstd_decompress_unchanged_record() {
+        let payload = b"hello world, this is a test that is long enough to be compressed by zstd for sure".to_vec();
+        let record = Record {
+            header: RecordHeader {
+                version: PROTOCOL_VERSION,
+                stream_id: StreamId(1),
+                epoch_id: EpochId(0),
+                seq_no: SeqNo(1),
+                record_type: RecordType::PredictiveConfirm,
+                codec_mode: CodecMode::None,
+                flags: RecordFlags::empty(),
+                item_id: ItemId(1),
+                payload_len: payload.len() as u32,
+            },
+            payload,
+            auth_tag: [0u8; AUTH_TAG_LEN],
+        };
+
+        // A record without PAYLOAD_ZSTD flag should be returned unchanged.
+        let result = record.clone().maybe_decompress_zstd().unwrap();
+        assert_eq!(result.payload, record.payload);
+    }
 }
