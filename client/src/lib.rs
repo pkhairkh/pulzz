@@ -184,6 +184,8 @@ pub struct ClientState {
     dict_manager: shared_protocol::DictionaryManager,
     template_registry: shared_protocol::TemplateRegistry,
     previous_versions: HashMap<u64, Vec<u8>>,
+    // P5: Compressor cache for Zstd context reuse.
+    compressor_cache: shared_protocol::CompressorCache,
 }
 
 impl Default for ClientState {
@@ -213,6 +215,7 @@ impl Default for ClientState {
             dict_manager: shared_protocol::DictionaryManager::default(),
             template_registry: shared_protocol::TemplateRegistry::default(),
             previous_versions: HashMap::new(),
+            compressor_cache: shared_protocol::CompressorCache::default(),
         }
     }
 }

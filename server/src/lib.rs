@@ -318,6 +318,14 @@ pub struct ServerState {
     dict_manager: shared_protocol::DictionaryManager,
     template_registry: shared_protocol::TemplateRegistry,
     previous_versions: HashMap<u64, Vec<u8>>,
+    // P3: Columnar batch accumulator for batching small items.
+    columnar_accumulator: shared_protocol::ColumnarBatchAccumulator,
+    // P4: Strategy performance tracker for adaptive strategy selection.
+    strategy_tracker: shared_protocol::StrategyPerformanceTracker,
+    // P5: Compressor cache for Zstd context reuse.
+    compressor_cache: shared_protocol::CompressorCache,
+    // P5: Compression budget for CPU overhead control.
+    compression_budget: shared_protocol::CompressionBudget,
     // P0: Compression metrics tracked before AEAD protection.
     compression_metrics: CompressionMetrics,
 }
@@ -360,6 +368,10 @@ impl Default for ServerState {
             dict_manager: shared_protocol::DictionaryManager::default(),
             template_registry: shared_protocol::TemplateRegistry::default(),
             previous_versions: HashMap::new(),
+            columnar_accumulator: shared_protocol::ColumnarBatchAccumulator::default(),
+            strategy_tracker: shared_protocol::StrategyPerformanceTracker::default(),
+            compressor_cache: shared_protocol::CompressorCache::default(),
+            compression_budget: shared_protocol::CompressionBudget::default(),
             compression_metrics: CompressionMetrics::default(),
         }
     }
@@ -694,7 +706,12 @@ impl ServerState {
         // Try to train a dictionary periodically.
         self.dict_manager.maybe_train(source_kind);
 
-        // Select the best compression strategy.
+        // P5: Check compression budget — if we're over budget, fall back
+        // to cheaper strategies to reduce CPU load.
+        let budget_ok = self.compression_budget.within_budget_for_size(exact_bytes.len());
+
+        // Select the best compression strategy using P4 adaptive tracker
+        // when within budget, otherwise use cheap strategies only.
         let available_dict = self.dict_manager.get_dictionary(source_kind)
             .map(|d| d.dict_id);
         let matching_template = if source_kind == shared_protocol::SourceKind::Json {
@@ -706,15 +723,35 @@ impl ServerState {
         let is_update = self.previous_versions.contains_key(&item_id.0);
         let previous_item_id = if is_update { Some(item_id.0) } else { None };
 
-        let strategy = shared_protocol::select_strategy(
-            source_kind,
-            exact_bytes,
-            is_update,
-            is_update,
-            available_dict,
-            matching_template,
-            previous_item_id,
-        );
+        let strategy = if budget_ok {
+            // P4: Use adaptive strategy selection with performance feedback.
+            self.strategy_tracker.select_strategy_with_feedback(
+                source_kind,
+                exact_bytes,
+                is_update,
+                is_update,
+                available_dict,
+                matching_template,
+                previous_item_id,
+                self.columnar_accumulator.len(),
+            )
+        } else {
+            // Over budget — use basic strategy (avoids expensive operations).
+            shared_protocol::select_strategy(
+                source_kind,
+                exact_bytes,
+                is_update,
+                is_update,
+                available_dict,
+                matching_template,
+                previous_item_id,
+            )
+        };
+
+        // P5: Record compressor cache status.
+        if matches!(strategy, shared_protocol::CompressionStrategy::ZstdDict { .. }) {
+            self.compressor_cache.record_compress(available_dict.map(|d| d.0));
+        }
 
         // Apply the compression strategy.
         // Returns (actual_strategy, compressed_data) so the tag matches
@@ -725,7 +762,18 @@ impl ServerState {
             }
             shared_protocol::CompressionStrategy::ZstdDict { .. } => {
                 match self.dict_manager.compress_with_dict(source_kind, exact_bytes) {
-                    Some(Ok(compressed)) => (strategy, compressed),
+                    Some(Ok(compressed)) if compressed.len() < exact_bytes.len() => {
+                        (strategy, compressed)
+                    }
+                    Some(Ok(_)) => {
+                        // Dict compression made it larger — fall back to raw Zstd.
+                        match shared_protocol::zstd_compress_raw(exact_bytes) {
+                            Ok(compressed) if compressed.len() < exact_bytes.len() => {
+                                (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
+                            }
+                            _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                        }
+                    }
                     _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
                 }
             }
@@ -738,8 +786,50 @@ impl ServerState {
             shared_protocol::CompressionStrategy::Delta { base_item_id } => {
                 if base_item_id == item_id.0 {
                     if let Some(base) = self.previous_versions.get(&item_id.0) {
+                        // P1: Try XOR delta first for same-length numeric updates.
+                        if base.len() == exact_bytes.len() {
+                            if let Ok(xor_delta) = shared_protocol::XorDelta::compute(base, exact_bytes) {
+                                if xor_delta.is_compact_vs(exact_bytes.len()) {
+                                    let xor_bytes = xor_delta.encode_to_bytes();
+                                    // Try Zstd-compressing the XOR delta for even better savings.
+                                    if let Ok(xor_compressed) = shared_protocol::zstd_compress_raw(&xor_bytes) {
+                                        if xor_compressed.len() < xor_bytes.len() && xor_compressed.len() < exact_bytes.len() {
+                                            // P1: XOR delta + Zstd is best.
+                                            // Encode as a Delta with compressed XOR inside.
+                                            let xor_strategy = shared_protocol::CompressionStrategy::Delta { base_item_id };
+                                            self.strategy_tracker.record(&xor_strategy, exact_bytes.len(), xor_compressed.len());
+                                            self.previous_versions.insert(item_id.0, exact_bytes.to_vec());
+                                            // We use a custom wire format: the Delta tag carries
+                                            // XOR-compressed data. The client will detect the format.
+                                            return shared_protocol::encode_compressed_payload(
+                                                shared_protocol::CompressionStrategy::Delta { base_item_id },
+                                                &xor_compressed,
+                                            );
+                                        }
+                                    }
+                                    if xor_bytes.len() < exact_bytes.len() {
+                                        self.strategy_tracker.record(&strategy, exact_bytes.len(), xor_bytes.len());
+                                        self.previous_versions.insert(item_id.0, exact_bytes.to_vec());
+                                        return shared_protocol::encode_compressed_payload(strategy, &xor_bytes);
+                                    }
+                                }
+                            }
+                        }
+
+                        // P1: Fall back to rolling-hash BinaryDelta.
                         let delta = shared_protocol::BinaryDelta::compute(base, exact_bytes);
                         let delta_bytes = delta.encode_to_bytes();
+
+                        // P1 Enhancement: Try Zstd-compressing the delta for additional savings.
+                        if let Ok(delta_compressed) = shared_protocol::delta_compress_with_zstd(&delta) {
+                            if delta_compressed.len() < delta_bytes.len() && delta_compressed.len() < exact_bytes.len() {
+                                // Zstd-compressed delta is best.
+                                self.strategy_tracker.record(&strategy, exact_bytes.len(), delta_compressed.len());
+                                self.previous_versions.insert(item_id.0, exact_bytes.to_vec());
+                                return shared_protocol::encode_compressed_payload(strategy, &delta_compressed);
+                            }
+                        }
+
                         if delta_bytes.len() < exact_bytes.len() {
                             (strategy, delta_bytes)
                         } else {
@@ -771,10 +861,12 @@ impl ServerState {
             shared_protocol::CompressionStrategy::Template { template_id } => {
                 if let Some(template) = self.template_registry.get_template(template_id) {
                     if let Some(values) = template.extract_values(exact_bytes) {
-                        let encoded = shared_protocol::StructuralTemplate::encode_slot_values(&values);
+                        // P2: Use compressed slot values for better savings.
+                        let encoded = shared_protocol::encode_slot_values_compressed(&values);
                         if encoded.len() < exact_bytes.len() {
                             (strategy, encoded)
                         } else {
+                            // Compressed slots still too large — try raw Zstd.
                             match shared_protocol::zstd_compress_raw(exact_bytes) {
                                 Ok(compressed) if compressed.len() < exact_bytes.len() => {
                                     (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
@@ -800,14 +892,43 @@ impl ServerState {
                 }
             }
             shared_protocol::CompressionStrategy::Columnar => {
-                match shared_protocol::zstd_compress_raw(exact_bytes) {
-                    Ok(compressed) if compressed.len() < exact_bytes.len() => {
-                        (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
+                // P3: Add item to the columnar accumulator for batch encoding.
+                // If the accumulator decides to flush, we'll get a batch.
+                let should_flush = self.columnar_accumulator.add(source_kind, exact_bytes);
+                if should_flush || self.columnar_accumulator.has_enough_for_columnar() {
+                    if let Some(batch) = self.columnar_accumulator.flush() {
+                        let batch_bytes = batch.encode_to_bytes();
+                        // Compress the columnar batch with Zstd for further savings.
+                        match shared_protocol::zstd_compress_raw(&batch_bytes) {
+                            Ok(compressed) if compressed.len() < batch_bytes.len() => {
+                                (shared_protocol::CompressionStrategy::Columnar, compressed)
+                            }
+                            _ => (shared_protocol::CompressionStrategy::Columnar, batch_bytes),
+                        }
+                    } else {
+                        // Couldn't flush — fall back to Zstd raw for this single item.
+                        match shared_protocol::zstd_compress_raw(exact_bytes) {
+                            Ok(compressed) if compressed.len() < exact_bytes.len() => {
+                                (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
+                            }
+                            _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                        }
                     }
-                    _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                } else {
+                    // Not enough items yet — compress individually and the
+                    // accumulator will batch them for the next flush.
+                    match shared_protocol::zstd_compress_raw(exact_bytes) {
+                        Ok(compressed) if compressed.len() < exact_bytes.len() => {
+                            (shared_protocol::CompressionStrategy::ZstdRaw, compressed)
+                        }
+                        _ => (shared_protocol::CompressionStrategy::Passthrough, exact_bytes.to_vec()),
+                    }
                 }
             }
         };
+
+        // P4: Record strategy performance for adaptive learning.
+        self.strategy_tracker.record(&actual_strategy, exact_bytes.len(), compressed_data.len());
 
         // Store previous version for delta encoding.
         self.previous_versions.insert(item_id.0, exact_bytes.to_vec());
@@ -1208,6 +1329,23 @@ impl ServerState {
     /// P0: Returns compression metrics tracked on the server side.
     pub fn compression_metrics(&self) -> &CompressionMetrics {
         &self.compression_metrics
+    }
+
+    /// P3: Flush the columnar batch accumulator, returning any pending batch.
+    /// This should be called when the session is closing or when a
+    /// time-based flush is triggered.
+    pub fn flush_columnar_batch(&mut self) -> Option<shared_protocol::ColumnarBatch> {
+        self.columnar_accumulator.flush_forced()
+    }
+
+    /// P4: Get the strategy performance tracker summary.
+    pub fn strategy_performance_summary(&self) -> String {
+        self.strategy_tracker.summary()
+    }
+
+    /// P5: Get the compressor cache hit rate.
+    pub fn compressor_cache_hit_rate(&self) -> f64 {
+        self.compressor_cache.hit_rate()
     }
 
     fn record_direct_state_downgrade(
