@@ -53,7 +53,7 @@ pub enum BootstrapMessageKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum BootstrapMessage {
     ClientHello(ClientHello),
     ServerHello(ServerHello),
@@ -76,7 +76,7 @@ impl BootstrapMessage {
     }
 
     pub fn to_frame(&self, config: &BootstrapConfig) -> Result<Vec<u8>, BootstrapError> {
-        let payload = serde_json::to_vec(self)?;
+        let payload = bincode::serde::encode_to_vec(self, bincode::config::standard())?;
         let mut out = Vec::with_capacity(BOOTSTRAP_MAGIC.len() + payload.len());
         out.extend_from_slice(BOOTSTRAP_MAGIC);
         out.extend_from_slice(&payload);
@@ -102,7 +102,7 @@ impl BootstrapMessage {
         {
             return Err(BootstrapError::InvalidFrameMagic);
         }
-        Ok(serde_json::from_slice(&frame[BOOTSTRAP_MAGIC.len()..])?)
+        Ok(bincode::serde::decode_from_slice(&frame[BOOTSTRAP_MAGIC.len()..], bincode::config::standard()).map(|(m, _)| m)?)
     }
 }
 
@@ -241,7 +241,7 @@ pub struct BootstrapServerConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum ClientSecurityConfig {
     PqMutual {
         issued_credential: IssuedClientCredential,
@@ -273,7 +273,7 @@ impl Default for PqSimpleServerBootstrapConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum ServerSecurityConfig {
     PqMutual {
         server_identity: ServerIdentityBundle,
@@ -441,7 +441,9 @@ pub struct ReplayCacheKey {
 #[derive(Debug, Error)]
 pub enum BootstrapError {
     #[error(transparent)]
-    Serde(#[from] serde_json::Error),
+    Codec(#[from] bincode::error::DecodeError),
+    #[error(transparent)]
+    Encode(#[from] bincode::error::EncodeError),
     #[error("bootstrap frame magic is invalid")]
     InvalidFrameMagic,
     #[error("bootstrap frame for {kind:?} exceeded {max_len} bytes (got {actual_len})")]
@@ -1367,7 +1369,7 @@ fn client_finish_signable_bytes(
         &transcript_hash(&[
             client_hello_frame,
             server_hello_frame,
-            &serde_json::to_vec(finish)?,
+            &bincode::serde::encode_to_vec(finish, bincode::config::standard())?,
         ]),
     ]))
 }
@@ -1398,14 +1400,14 @@ fn client_credential_signable_bytes(
         client_signing_public_key: &'a [u8],
     }
 
-    Ok(serde_json::to_vec(&Signable {
+    Ok(bincode::serde::encode_to_vec(&Signable {
         client_id: &bundle.client_id,
         issuer_server_id: &bundle.issuer_server_id,
         scope: &bundle.scope,
         issued_at_unix_secs: bundle.issued_at_unix_secs,
         expires_at_unix_secs: bundle.expires_at_unix_secs,
         client_signing_public_key: &bundle.client_signing_public_key,
-    })?)
+    }, bincode::config::standard())?)
 }
 
 fn identity_signable_bytes(bundle: &ServerIdentityBundle) -> Result<Vec<u8>, BootstrapError> {
@@ -1417,12 +1419,12 @@ fn identity_signable_bytes(bundle: &ServerIdentityBundle) -> Result<Vec<u8>, Boo
         server_signing_public_key: &'a [u8],
     }
 
-    Ok(serde_json::to_vec(&Signable {
+    Ok(bincode::serde::encode_to_vec(&Signable {
         server_id: &bundle.server_id,
         issued_at_unix_secs: bundle.issued_at_unix_secs,
         expires_at_unix_secs: bundle.expires_at_unix_secs,
         server_signing_public_key: &bundle.server_signing_public_key,
-    })?)
+    }, bincode::config::standard())?)
 }
 
 fn decode_mldsa_verifying_key(bytes: &[u8]) -> Result<MlDsaVerifyingKey<MlDsa65>, BootstrapError> {

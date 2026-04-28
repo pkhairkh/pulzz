@@ -549,16 +549,13 @@ impl PredictiveReconstructionGraph {
         }
     }
 
-    // S2.2.e: serde_json::to_vec serializes all derived fields including any
-    // dependency data within PRG nodes. No dependency_closure is silently
-    // dropped or truncated during encode.
     pub fn encode(&self) -> Result<Vec<u8>, StateProgramError> {
-        serde_json::to_vec(self)
+        bincode::serde::encode_to_vec(self, bincode::config::standard())
             .map_err(|error| StateProgramError::PrgSerialization(error.to_string()))
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, StateProgramError> {
-        let graph: Self = serde_json::from_slice(bytes)
+        let (graph, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())
             .map_err(|error| StateProgramError::PrgSerialization(error.to_string()))?;
         if graph.version != Self::VERSION {
             return Err(StateProgramError::InvalidPrgVersion(graph.version));
@@ -626,15 +623,13 @@ impl SchemaDefPayload {
         }
     }
 
-    // S2.2.e: serde_json::to_vec preserves dependency_closure (SchemaDependencyClosure)
-    // in full. No silent truncation occurs during encode.
     pub fn encode(&self) -> Result<Vec<u8>, StateProgramError> {
-        serde_json::to_vec(self)
+        bincode::serde::encode_to_vec(self, bincode::config::standard())
             .map_err(|error| StateProgramError::SchemaPayloadSerialization(error.to_string()))
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, StateProgramError> {
-        let payload: Self = serde_json::from_slice(bytes)
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())
             .map_err(|error| StateProgramError::SchemaPayloadSerialization(error.to_string()))?;
         if payload.version != Self::VERSION {
             return Err(StateProgramError::InvalidSchemaPayloadVersion(
@@ -681,12 +676,12 @@ impl SharedDictionaryDefPayload {
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, StateProgramError> {
-        serde_json::to_vec(self)
+        bincode::serde::encode_to_vec(self, bincode::config::standard())
             .map_err(|error| StateProgramError::PredictiveDispatchSerialization(error.to_string()))
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, StateProgramError> {
-        let payload: Self = serde_json::from_slice(bytes).map_err(|error| {
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard()).map_err(|error| {
             StateProgramError::PredictiveDispatchSerialization(error.to_string())
         })?;
         if payload.version != Self::VERSION {
@@ -942,12 +937,12 @@ impl PredictiveRouteDispatchPayload {
     // within HybridRoute components, SubstrateObject dependency_closure, and
     // SchemaDefPayload dependency_closure. No silent truncation occurs during encode.
     pub fn encode(&self) -> Result<Vec<u8>, StateProgramError> {
-        serde_json::to_vec(self)
+        bincode::serde::encode_to_vec(self, bincode::config::standard())
             .map_err(|error| StateProgramError::PredictiveDispatchSerialization(error.to_string()))
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, StateProgramError> {
-        let payload: Self = serde_json::from_slice(bytes).map_err(|error| {
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard()).map_err(|error| {
             StateProgramError::PredictiveDispatchSerialization(error.to_string())
         })?;
         if payload.version != Self::VERSION {
@@ -1667,12 +1662,12 @@ impl AssemblyDefPayload {
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, StateProgramError> {
-        serde_json::to_vec(self)
+        bincode::serde::encode_to_vec(self, bincode::config::standard())
             .map_err(|error| StateProgramError::AssemblyPayloadSerialization(error.to_string()))
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, StateProgramError> {
-        let payload: Self = serde_json::from_slice(bytes)
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())
             .map_err(|error| StateProgramError::AssemblyPayloadSerialization(error.to_string()))?;
         if payload.version != Self::VERSION {
             return Err(StateProgramError::InvalidAssemblyPayloadVersion(
@@ -1818,12 +1813,12 @@ impl TransformDefPayload {
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, StateProgramError> {
-        serde_json::to_vec(self)
+        bincode::serde::encode_to_vec(self, bincode::config::standard())
             .map_err(|error| StateProgramError::TransformPayloadSerialization(error.to_string()))
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, StateProgramError> {
-        let payload: Self = serde_json::from_slice(bytes)
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())
             .map_err(|error| StateProgramError::TransformPayloadSerialization(error.to_string()))?;
         if payload.version != Self::VERSION {
             return Err(StateProgramError::InvalidTransformPayloadVersion(
@@ -1926,12 +1921,12 @@ impl TransformInstancePayload {
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, StateProgramError> {
-        serde_json::to_vec(self)
+        bincode::serde::encode_to_vec(self, bincode::config::standard())
             .map_err(|error| StateProgramError::TransformPayloadSerialization(error.to_string()))
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, StateProgramError> {
-        let payload: Self = serde_json::from_slice(bytes)
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())
             .map_err(|error| StateProgramError::TransformPayloadSerialization(error.to_string()))?;
         if payload.version != Self::VERSION {
             return Err(StateProgramError::InvalidTransformPayloadVersion(
@@ -2469,12 +2464,12 @@ impl EpisodeHintPayload {
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, StateProgramError> {
-        serde_json::to_vec(self)
+        bincode::serde::encode_to_vec(self, bincode::config::standard())
             .map_err(|error| StateProgramError::EpisodePayloadSerialization(error.to_string()))
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, StateProgramError> {
-        let payload: Self = serde_json::from_slice(bytes)
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())
             .map_err(|error| StateProgramError::EpisodePayloadSerialization(error.to_string()))?;
         if payload.version != Self::VERSION {
             return Err(StateProgramError::InvalidEpisodePayloadVersion(

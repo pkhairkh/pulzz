@@ -1138,7 +1138,7 @@ pub struct DependencyClosure {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "node_kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum AssemblyBodyNode {
     DelimiterAnchor {
         bytes: Vec<u8>,

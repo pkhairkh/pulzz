@@ -3617,7 +3617,8 @@ mod tests {
             .unwrap();
         state.assemblies.clear();
 
-        let assembly_ref = assembly_ref_from_payload(&AssemblyDefPayload::new(assembly.clone()));
+        let assembly_def_payload = AssemblyDefPayload::new(assembly.clone());
+        let assembly_ref = assembly_ref_from_payload(&assembly_def_payload);
         let dependency = shared_protocol::ObjectDependency {
             object_kind: shared_protocol::ObjectKind::Assembly,
             object_id: format!("assembly:{}", assembly.assembly_id.0),
@@ -3634,7 +3635,7 @@ mod tests {
             sync_risk: 0,
             literal_bytes: Vec::new(),
             assembly_ref: Some(assembly_ref.clone()),
-            inline_assembly_defs: Vec::new(),
+            inline_assembly_defs: vec![assembly_def_payload],
             inline_schema_defs: Vec::new(),
             inline_dictionaries: Vec::new(),
             inline_episode_hints: Vec::new(),

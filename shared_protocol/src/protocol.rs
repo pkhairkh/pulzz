@@ -295,13 +295,13 @@ impl MemoryRetirePayload {
     const KIND: &'static str = "memory retire payload";
 
     pub fn encode(&self) -> Result<Vec<u8>, WireError> {
-        serde_json::to_vec(self).map_err(|error| {
+        bincode::serde::encode_to_vec(self, bincode::config::standard()).map_err(|error| {
             invalid_payload_error(Self::KIND, format!("serialization failed: {error}"))
         })
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
-        let payload: Self = serde_json::from_slice(bytes).map_err(|error| {
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard()).map_err(|error| {
             invalid_payload_error(Self::KIND, format!("decode failed: {error}"))
         })?;
         if payload.version != Self::VERSION {
@@ -330,13 +330,13 @@ impl MemoryAckPayload {
     const KIND: &'static str = "memory ack payload";
 
     pub fn encode(&self) -> Result<Vec<u8>, WireError> {
-        serde_json::to_vec(self).map_err(|error| {
+        bincode::serde::encode_to_vec(self, bincode::config::standard()).map_err(|error| {
             invalid_payload_error(Self::KIND, format!("serialization failed: {error}"))
         })
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
-        let payload: Self = serde_json::from_slice(bytes).map_err(|error| {
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard()).map_err(|error| {
             invalid_payload_error(Self::KIND, format!("decode failed: {error}"))
         })?;
         if payload.version != Self::VERSION {
@@ -363,13 +363,13 @@ impl PlaneResyncPayload {
     const KIND: &'static str = "plane resync payload";
 
     pub fn encode(&self) -> Result<Vec<u8>, WireError> {
-        serde_json::to_vec(self).map_err(|error| {
+        bincode::serde::encode_to_vec(self, bincode::config::standard()).map_err(|error| {
             invalid_payload_error(Self::KIND, format!("serialization failed: {error}"))
         })
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
-        let payload: Self = serde_json::from_slice(bytes).map_err(|error| {
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard()).map_err(|error| {
             invalid_payload_error(Self::KIND, format!("decode failed: {error}"))
         })?;
         if payload.version != Self::VERSION {

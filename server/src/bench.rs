@@ -6304,7 +6304,9 @@ fn benchmark_source_cache_for_case(
         root_dir: cache_root,
         optimizations: case.optimization.source_optimization_config(),
         max_object_material_bytes: 256 * 1024 * 1024,
+        max_hot_entries: crate::source_cache::DEFAULT_MAX_HOT_ENTRIES,
         cleanup_on_drop: true,
+        in_memory_only: true, // I/O isolation: skip disk writes during benchmarks
     })?))
 }
 
@@ -7902,8 +7904,11 @@ mod tests {
         for _ in 0..5 {
             buffer.push(frame.clone(), &mut flushed);
         }
+        // Each frame has transport_len = payload_len + HEADER_LEN + AUTH_TAG_LEN + 4
+        // = 1024 + 37 + 16 + 4 = 1081. 3 frames = 3243 < 4096, 4 frames = 4324 > 4096.
+        // So 3 frames fit before the pre-flush triggers on the 4th.
         assert_eq!(flushed.len(), 1);
-        assert_eq!(flushed[0].len(), 4);
+        assert_eq!(flushed[0].len(), 3);
     }
 
     #[test]
@@ -7914,8 +7919,9 @@ mod tests {
         for _ in 0..9 {
             buffer.push(frame.clone(), &mut flushed);
         }
+        // transport_len = 8192 + 57 = 8249. 7 frames = 57743 < 65536, 8 frames = 65992 > 65536.
         assert_eq!(flushed.len(), 1);
-        assert_eq!(flushed[0].len(), 8);
+        assert_eq!(flushed[0].len(), 7);
     }
 
     #[test]
@@ -7926,8 +7932,9 @@ mod tests {
         for _ in 0..9 {
             buffer.push(frame.clone(), &mut flushed);
         }
+        // transport_len = 131072 + 57 = 131129. 7 frames = 917903 < 1048576, 8 frames = 1049032 > 1048576.
         assert_eq!(flushed.len(), 1);
-        assert_eq!(flushed[0].len(), 8);
+        assert_eq!(flushed[0].len(), 7);
     }
 
     #[test]

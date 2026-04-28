@@ -1,18 +1,18 @@
 use std::{
-    collections::HashMap,
     fs,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
     Assembly, AssemblyId, CachedPredictiveObject, ChpmtObject, CompletionCandidate,
     CompletionQuery, ObjectKind, ObjectLifecycleMeta, PredictiveObjectKey,
     PredictiveObjectStorePath, PreparedSource, SourceDescriptor, SourceError,
     SourceOptimizationConfig, SparseIndexEntry, SparseIndexKey, SparseIndexTable, TransformClass,
-    TransformId, prepare_binary_source, prepare_image_source, prepare_json_source,
+    TransformId,
     prepare_text_source,
 };
 use thiserror::Error;
@@ -23,12 +23,27 @@ const PREDICTIVE_OBJECT_DIR: &str = "predictive_objects";
 const OBJECT_DIR: &str = "objects";
 const INDEX_DIR: &str = "index";
 
+/// Default maximum number of entries in each hot cache (descriptors, objects,
+/// assemblies, transforms). Bounds memory usage by evicting the oldest entries
+/// (FIFO/insertion-order) when the cap is exceeded.
+pub const DEFAULT_MAX_HOT_ENTRIES: usize = 4096;
+
 #[derive(Debug, Clone)]
 pub struct SourceCacheConfig {
     pub root_dir: PathBuf,
     pub optimizations: SourceOptimizationConfig,
     pub max_object_material_bytes: u64,
+    /// Maximum number of entries in each hot cache. When exceeded, the oldest
+    /// entries (by insertion order) are evicted. This bounds the in-memory
+    /// working set independently of the on-disk byte budget.
+    pub max_hot_entries: usize,
     pub cleanup_on_drop: bool,
+    /// When true, all disk I/O is skipped. Objects are stored only in the
+    /// in-memory hot caches, and lookups only check hot caches (no disk
+    /// fallback). This isolates benchmark measurements from filesystem
+    /// latency, preventing ~450K file writes from contaminating throughput
+    /// and latency measurements.
+    pub in_memory_only: bool,
 }
 
 impl Default for SourceCacheConfig {
@@ -37,7 +52,9 @@ impl Default for SourceCacheConfig {
             root_dir: default_cache_root(),
             optimizations: SourceOptimizationConfig::default(),
             max_object_material_bytes: 256 * 1024 * 1024,
+            max_hot_entries: DEFAULT_MAX_HOT_ENTRIES,
             cleanup_on_drop: false,
+            in_memory_only: false,
         }
     }
 }
@@ -45,10 +62,12 @@ impl Default for SourceCacheConfig {
 #[derive(Debug, Clone)]
 pub struct SourceCache {
     config: SourceCacheConfig,
-    hot_descriptors: Arc<Mutex<HashMap<String, SourceDescriptor>>>,
-    hot_objects: Arc<Mutex<HashMap<String, CachedPredictiveObject>>>,
-    hot_assemblies: Arc<Mutex<HashMap<String, Assembly>>>,
-    hot_transforms: Arc<Mutex<HashMap<String, TransformClass>>>,
+    // IndexMap preserves insertion order for FIFO eviction when the hot cache
+    // exceeds max_hot_entries. This bounds the in-memory working set.
+    hot_descriptors: Arc<Mutex<IndexMap<String, SourceDescriptor>>>,
+    hot_objects: Arc<Mutex<IndexMap<String, CachedPredictiveObject>>>,
+    hot_assemblies: Arc<Mutex<IndexMap<String, Assembly>>>,
+    hot_transforms: Arc<Mutex<IndexMap<String, TransformClass>>>,
     sparse_index: Arc<Mutex<SparseIndexTable>>,
     object_material_bytes: Arc<Mutex<u64>>,
 }
@@ -134,29 +153,41 @@ pub struct StoredPredictiveObject {
 
 impl SourceCache {
     pub fn new(config: SourceCacheConfig) -> Result<Self, SourceCacheError> {
-        fs::create_dir_all(config.root_dir.join(CONTENT_DIR))?;
-        fs::create_dir_all(config.root_dir.join(PREDICTIVE_OBJECT_DIR))?;
-        fs::create_dir_all(config.root_dir.join(OBJECT_DIR))?;
-        fs::create_dir_all(config.root_dir.join(INDEX_DIR))?;
-        let object_material_dir = config.root_dir.join(PREDICTIVE_OBJECT_DIR);
-        let object_material_bytes = fs::read_dir(&object_material_dir)?
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .filter_map(|entry| entry.metadata().ok().map(|metadata| metadata.len()))
-            .sum();
+        // In memory-only mode, skip all directory creation and disk I/O setup.
+        if !config.in_memory_only {
+            fs::create_dir_all(config.root_dir.join(CONTENT_DIR))?;
+            fs::create_dir_all(config.root_dir.join(PREDICTIVE_OBJECT_DIR))?;
+            fs::create_dir_all(config.root_dir.join(OBJECT_DIR))?;
+            fs::create_dir_all(config.root_dir.join(INDEX_DIR))?;
+        }
         Ok(Self {
             config,
-            hot_descriptors: Arc::new(Mutex::new(HashMap::new())),
-            hot_objects: Arc::new(Mutex::new(HashMap::new())),
-            hot_assemblies: Arc::new(Mutex::new(HashMap::new())),
-            hot_transforms: Arc::new(Mutex::new(HashMap::new())),
+            hot_descriptors: Arc::new(Mutex::new(IndexMap::new())),
+            hot_objects: Arc::new(Mutex::new(IndexMap::new())),
+            hot_assemblies: Arc::new(Mutex::new(IndexMap::new())),
+            hot_transforms: Arc::new(Mutex::new(IndexMap::new())),
             sparse_index: Arc::new(Mutex::new(SparseIndexTable::default())),
-            object_material_bytes: Arc::new(Mutex::new(object_material_bytes)),
+            object_material_bytes: Arc::new(Mutex::new(0)),
         })
     }
 
     pub fn config(&self) -> &SourceCacheConfig {
         &self.config
+    }
+
+    /// Evict the oldest entries (by insertion order) from an IndexMap-based
+    /// hot cache until it is at or below `max_entries`. This bounds memory by
+    /// discarding the least-recently-inserted entries first, which approximates
+    /// FIFO eviction. Entries that were accessed more recently tend to survive
+    /// longer because re-insertion (on cache hit promotion) moves them to the
+    /// end of the insertion order.
+    fn evict_if_over_capacity<K, V>(cache: &mut IndexMap<K, V>, max_entries: usize)
+    where
+        K: std::hash::Hash + Eq + Clone,
+    {
+        while cache.len() > max_entries {
+            cache.shift_remove_index(0);
+        }
     }
 
     fn cached_chpmt_object(
@@ -196,6 +227,14 @@ impl SourceCache {
         self.store_source(descriptor)?;
         let now = unix_time_secs();
         let cached = Self::cached_chpmt_object(descriptor, object_key, exact_bytes.to_vec());
+        if let Ok(mut cache) = self.hot_objects.lock() {
+            cache.insert(object_key.storage_key(), cached.clone());
+            Self::evict_if_over_capacity(&mut cache, self.config.max_hot_entries);
+        }
+        // Skip all disk I/O in memory-only mode (benchmark I/O isolation).
+        if self.config.in_memory_only {
+            return Ok(());
+        }
         let entry = CachedObjectMaterialEntry {
             cached: cached.clone(),
             stored_unix_secs: now,
@@ -203,13 +242,10 @@ impl SourceCache {
         };
         let path = self.predictive_object_material_path(object_key);
         let previous_len = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
-        let serialized = serde_json::to_vec(&entry)?;
+        let serialized = bincode::serde::encode_to_vec(&entry, bincode::config::standard())?;
         fs::write(&path, &serialized)?;
         self.store_predictive_object_record(&cached, now)?;
-        if let Ok(mut cache) = self.hot_objects.lock() {
-            cache.insert(object_key.storage_key(), entry.cached.clone());
-        }
-        self.insert_sparse_index_entry(&cached, default_lifecycle_meta(cached.cue, now))?;
+        self.insert_sparse_index_entry_for_cached_object(&cached, default_lifecycle_meta(cached.cue, now))?;
         if let Ok(mut total_bytes) = self.object_material_bytes.lock() {
             *total_bytes = total_bytes
                 .saturating_sub(previous_len)
@@ -228,29 +264,39 @@ impl SourceCache {
                 return Ok(Some(cached.clone()));
             }
         }
+        // In memory-only mode, only check hot caches (no disk fallback).
+        if self.config.in_memory_only {
+            return Ok(None);
+        }
         let path = self.content_path(descriptor.source_hash);
         if !path.exists() {
             return Ok(None);
         }
-        let entry: CachedSourceDescriptor = serde_json::from_slice(&fs::read(&path)?)?;
+        let (entry, _): (CachedSourceDescriptor, usize) = bincode::serde::decode_from_slice(&fs::read(&path)?, bincode::config::standard())?;
         if let Ok(mut cache) = self.hot_descriptors.lock() {
             cache.insert(descriptor.source_hash.to_string(), entry.descriptor.clone());
+            Self::evict_if_over_capacity(&mut cache, self.config.max_hot_entries);
         }
         Ok(Some(entry.descriptor))
     }
 
     pub fn store_source(&self, descriptor: &SourceDescriptor) -> Result<(), SourceCacheError> {
+        if let Ok(mut cache) = self.hot_descriptors.lock() {
+            cache.insert(descriptor.source_hash.to_string(), descriptor.clone());
+            Self::evict_if_over_capacity(&mut cache, self.config.max_hot_entries);
+        }
+        // Skip disk write in memory-only mode.
+        if self.config.in_memory_only {
+            return Ok(());
+        }
         let entry = CachedSourceDescriptor {
             descriptor: descriptor.clone(),
             last_access_unix_secs: unix_time_secs(),
         };
         fs::write(
             self.content_path(descriptor.source_hash),
-            serde_json::to_vec(&entry)?,
+            bincode::serde::encode_to_vec(&entry, bincode::config::standard())?,
         )?;
-        if let Ok(mut cache) = self.hot_descriptors.lock() {
-            cache.insert(descriptor.source_hash.to_string(), descriptor.clone());
-        }
         Ok(())
     }
 
@@ -271,13 +317,18 @@ impl SourceCache {
                 return Ok(Some(cached.clone()));
             }
         }
+        // In memory-only mode, only check hot caches (no disk fallback).
+        if self.config.in_memory_only {
+            return Ok(None);
+        }
         let path = self.predictive_object_material_path(object_key);
         if !path.exists() {
             return Ok(None);
         }
-        let entry: CachedObjectMaterialEntry = serde_json::from_slice(&fs::read(&path)?)?;
+        let (entry, _): (CachedObjectMaterialEntry, usize) = bincode::serde::decode_from_slice(&fs::read(&path)?, bincode::config::standard())?;
         if let Ok(mut cache) = self.hot_objects.lock() {
             cache.insert(storage_key, entry.cached.clone());
+            Self::evict_if_over_capacity(&mut cache, self.config.max_hot_entries);
         }
         if let Ok(mut cache) = self.hot_descriptors.lock() {
             cache.insert(
@@ -363,7 +414,7 @@ impl SourceCache {
         fs::create_dir_all(&object_root)?;
         fs::write(
             object_root.join(format!("{}.json", path_shape.storage_key)),
-            serde_json::to_vec(&persisted)?,
+            bincode::serde::encode_to_vec(&persisted, bincode::config::standard())?,
         )?;
         Ok(())
     }
@@ -470,7 +521,7 @@ impl SourceCache {
                 let path = entry.path();
                 let metadata = entry.metadata().ok()?;
                 let json = fs::read(&path).ok()?;
-                let cached: CachedObjectMaterialEntry = serde_json::from_slice(&json).ok()?;
+                let cached: CachedObjectMaterialEntry = bincode::serde::decode_from_slice(&json, bincode::config::standard()).map(|(v, _)| v).ok()?;
                 Some((path, metadata.len(), cached.last_access_unix_secs))
             })
             .collect::<Vec<_>>();
@@ -482,7 +533,7 @@ impl SourceCache {
             }
             if let Some(file_stem) = path.file_stem().and_then(|stem| stem.to_str()) {
                 if let Ok(mut cache) = self.hot_objects.lock() {
-                    cache.remove(file_stem);
+                    cache.shift_remove(file_stem);
                 }
             }
             fs::remove_file(&path)?;
@@ -560,7 +611,9 @@ pub enum SourceCacheError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
-    Serde(#[from] serde_json::Error),
+    Decode(#[from] bincode::error::DecodeError),
+    #[error(transparent)]
+    Encode(#[from] bincode::error::EncodeError),
     #[error(transparent)]
     Source(#[from] SourceError),
     #[error(transparent)]
@@ -596,7 +649,9 @@ mod tests {
                 canonicalization_profile: shared_protocol::CanonicalizationProfile::Structural,
             },
             max_object_material_bytes: 16 * 1024 * 1024,
+            max_hot_entries: DEFAULT_MAX_HOT_ENTRIES,
             cleanup_on_drop: false,
+            in_memory_only: false,
         };
         let prepared = prepare_text_ingest_source("alpha\r\nbeta", Some("note.txt".to_string()));
         let cache = SourceCache::new(config.clone()).unwrap();
@@ -632,7 +687,9 @@ mod tests {
                 canonicalization_profile: shared_protocol::CanonicalizationProfile::Structural,
             },
             max_object_material_bytes: 16 * 1024 * 1024,
+            max_hot_entries: DEFAULT_MAX_HOT_ENTRIES,
             cleanup_on_drop: false,
+            in_memory_only: false,
         };
         let prepared = prepare_text_ingest_source("gamma", Some("gamma.txt".to_string()));
         let cache = SourceCache::new(config).unwrap();
@@ -652,6 +709,42 @@ mod tests {
 
         let _ = fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn hot_cache_evicts_oldest_entries_when_over_capacity() {
+        let root = test_cache_root("eviction");
+        let config = SourceCacheConfig {
+            root_dir: root.clone(),
+            optimizations: SourceOptimizationConfig {
+                dedup_enabled: true,
+                inline_source_meta_enabled: false,
+                data_plane_codec: shared_protocol::DataPlaneCodecPreference::Adaptive,
+                reversible_preprocessing_enabled: true,
+                canonicalization_profile: shared_protocol::CanonicalizationProfile::Structural,
+            },
+            max_object_material_bytes: 16 * 1024 * 1024,
+            max_hot_entries: 3,
+            cleanup_on_drop: true,
+            in_memory_only: true,
+        };
+        let cache = SourceCache::new(config).unwrap();
+
+        // Insert 5 distinct items; only the last 3 should remain in the hot cache.
+        for i in 0..5u8 {
+            let text = format!("eviction-test-item-{i}");
+            let prepared = prepare_text_ingest_source(&text, Some(format!("item{i}.txt")));
+            let _ = cache
+                .lookup_or_materialize(&prepared, |_descriptor, canonical_bytes| {
+                    Ok(canonical_bytes.to_vec())
+                })
+                .unwrap();
+        }
+
+        let hot_objects = cache.hot_objects.lock().unwrap();
+        assert!(hot_objects.len() <= 3, "hot cache should be bounded by max_hot_entries, got {}", hot_objects.len());
+
+        let _ = fs::remove_dir_all(root);
+    }
 }
 
 impl SourceCache {
@@ -660,6 +753,27 @@ impl SourceCache {
         let key = format!("assembly:{}", assembly.assembly_id.0);
         if let Ok(mut cache) = self.hot_assemblies.lock() {
             cache.insert(key.clone(), assembly.clone());
+            Self::evict_if_over_capacity(&mut cache, self.config.max_hot_entries);
+        }
+        if let Ok(mut sparse_index) = self.sparse_index.lock() {
+            sparse_index.insert(
+                SparseIndexKey {
+                    source_kind: assembly.source_kind,
+                    family: assembly.source_kind.cue_family(),
+                    cue: assembly.cue,
+                },
+                SparseIndexEntry {
+                    object_id: key.clone(),
+                    source_kind: assembly.source_kind,
+                    object_kind: ObjectKind::Assembly,
+                    cue: assembly.cue,
+                    lifecycle: assembly.lifecycle,
+                },
+            );
+        }
+        // Skip disk write in memory-only mode.
+        if self.config.in_memory_only {
+            return Ok(());
         }
         let stored = StoredAssemblyObject {
             assembly: assembly.clone(),
@@ -671,23 +785,7 @@ impl SourceCache {
             .root_dir
             .join(OBJECT_DIR)
             .join(format!("{}.json", key.replace(":", "_")));
-        fs::write(path, serde_json::to_vec(&stored)?)?;
-        if let Ok(mut sparse_index) = self.sparse_index.lock() {
-            sparse_index.insert(
-                SparseIndexKey {
-                    source_kind: assembly.source_kind,
-                    family: assembly.source_kind.cue_family(),
-                    cue: assembly.cue,
-                },
-                SparseIndexEntry {
-                    object_id: key,
-                    source_kind: assembly.source_kind,
-                    object_kind: ObjectKind::Assembly,
-                    cue: assembly.cue,
-                    lifecycle: assembly.lifecycle,
-                },
-            );
-        }
+        fs::write(path, bincode::serde::encode_to_vec(&stored, bincode::config::standard())?)?;
         Ok(())
     }
 
@@ -701,6 +799,10 @@ impl SourceCache {
                 return Ok(Some(assembly.clone()));
             }
         }
+        // In memory-only mode, only check hot caches (no disk fallback).
+        if self.config.in_memory_only {
+            return Ok(None);
+        }
         let path = self
             .config
             .root_dir
@@ -709,9 +811,10 @@ impl SourceCache {
         if !path.exists() {
             return Ok(None);
         }
-        let stored: StoredAssemblyObject = serde_json::from_slice(&fs::read(&path)?)?;
+        let (stored, _): (StoredAssemblyObject, usize) = bincode::serde::decode_from_slice(&fs::read(&path)?, bincode::config::standard())?;
         if let Ok(mut cache) = self.hot_assemblies.lock() {
             cache.insert(key, stored.assembly.clone());
+            Self::evict_if_over_capacity(&mut cache, self.config.max_hot_entries);
         }
         Ok(Some(stored.assembly))
     }
@@ -731,6 +834,15 @@ impl SourceCache {
     pub fn store_transform_class(&self, class: &TransformClass) -> Result<(), SourceCacheError> {
         let key = format!("transform:{}", class.transform_id.0);
         let now = unix_time_secs();
+        if let Ok(mut cache) = self.hot_transforms.lock() {
+            cache.insert(key.clone(), class.clone());
+            Self::evict_if_over_capacity(&mut cache, self.config.max_hot_entries);
+        }
+        self.insert_sparse_index_entry_for_transform(class, &key)?;
+        // Skip disk write in memory-only mode.
+        if self.config.in_memory_only {
+            return Ok(());
+        }
         let stored = StoredTransformClass {
             class: class.clone(),
             stored_unix_secs: now,
@@ -741,11 +853,50 @@ impl SourceCache {
             .root_dir
             .join(OBJECT_DIR)
             .join(format!("{}.json", key.replace(":", "_")));
-        fs::write(&path, serde_json::to_vec(&stored)?)?;
-        if let Ok(mut cache) = self.hot_transforms.lock() {
-            cache.insert(key.clone(), class.clone());
+        fs::write(&path, bincode::serde::encode_to_vec(&stored, bincode::config::standard())?)?;
+        Ok(())
+    }
+
+    fn insert_sparse_index_entry_for_cached_object(
+        &self,
+        cached: &CachedPredictiveObject,
+        lifecycle: ObjectLifecycleMeta,
+    ) -> Result<(), SourceCacheError> {
+        let entry = SparseIndexEntry {
+            object_id: cached.object_key.storage_key(),
+            source_kind: cached.descriptor.kind,
+            object_kind: cached.object_key.object_kind,
+            cue: cached.cue,
+            lifecycle,
+        };
+        let index_key = SparseIndexKey {
+            source_kind: cached.descriptor.kind,
+            family: cached.descriptor.kind.cue_family(),
+            cue: cached.cue,
+        };
+        {
+            let mut index = self.sparse_index.lock().map_err(|_| {
+                SourceCacheError::Invariant("sparse index lock poisoned".to_string())
+            })?;
+            index.insert(index_key, entry.clone());
         }
-        self.insert_sparse_index_entry_for_transform(class, &key)?;
+        // Skip disk write in memory-only mode.
+        if self.config.in_memory_only {
+            return Ok(());
+        }
+        let index_root = self
+            .config
+            .root_dir
+            .join(INDEX_DIR)
+            .join(cached.descriptor.kind.slug())
+            .join(cached.object_key.object_kind.storage_slug());
+        fs::create_dir_all(&index_root)?;
+        let key = cached.object_key.storage_key();
+        fs::write(
+            index_root.join(format!("{}.bin", key.replace(":", "_"))),
+            bincode::serde::encode_to_vec(&entry, bincode::config::standard())
+                .map_err(|e| SourceCacheError::Invariant(e.to_string()))?,
+        )?;
         Ok(())
     }
 
@@ -772,6 +923,10 @@ impl SourceCache {
             })?;
             index.insert(index_key, entry.clone());
         }
+        // Skip disk write in memory-only mode.
+        if self.config.in_memory_only {
+            return Ok(());
+        }
         let index_root = self
             .config
             .root_dir
@@ -781,7 +936,7 @@ impl SourceCache {
         fs::create_dir_all(&index_root)?;
         fs::write(
             index_root.join(format!("{}.json", key.replace(":", "_"))),
-            serde_json::to_vec(&entry)?,
+            bincode::serde::encode_to_vec(&entry, bincode::config::standard())?,
         )?;
         Ok(())
     }
@@ -796,6 +951,10 @@ impl SourceCache {
                 return Ok(Some(class.clone()));
             }
         }
+        // In memory-only mode, only check hot caches (no disk fallback).
+        if self.config.in_memory_only {
+            return Ok(None);
+        }
         let path = self
             .config
             .root_dir
@@ -804,9 +963,10 @@ impl SourceCache {
         if !path.exists() {
             return Ok(None);
         }
-        let stored: StoredTransformClass = serde_json::from_slice(&fs::read(&path)?)?;
+        let (stored, _): (StoredTransformClass, usize) = bincode::serde::decode_from_slice(&fs::read(&path)?, bincode::config::standard())?;
         if let Ok(mut cache) = self.hot_transforms.lock() {
             cache.insert(key, stored.class.clone());
+            Self::evict_if_over_capacity(&mut cache, self.config.max_hot_entries);
         }
         Ok(Some(stored.class))
     }

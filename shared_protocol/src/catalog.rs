@@ -428,11 +428,11 @@ impl CatalogSyncPayload {
 
     pub fn encode(&self) -> Result<Vec<u8>, CatalogError> {
         self.validate_basic()?;
-        serde_json::to_vec(self).map_err(|error| CatalogError::Serde(error.to_string()))
+        bincode::serde::encode_to_vec(self, bincode::config::standard()).map_err(|error| CatalogError::Serde(error.to_string()))
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, CatalogError> {
-        let payload: Self = serde_json::from_slice(bytes)
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())
             .map_err(|error| CatalogError::Serde(error.to_string()))?;
         payload.validate_basic()?;
         Ok(payload)
@@ -511,11 +511,11 @@ impl RepairPayload {
 
     pub fn encode(&self) -> Result<Vec<u8>, CatalogError> {
         self.validate()?;
-        serde_json::to_vec(self).map_err(|error| CatalogError::Serde(error.to_string()))
+        bincode::serde::encode_to_vec(self, bincode::config::standard()).map_err(|error| CatalogError::Serde(error.to_string()))
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, CatalogError> {
-        let payload: Self = serde_json::from_slice(bytes)
+        let (payload, _): (Self, usize) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())
             .map_err(|error| CatalogError::Serde(error.to_string()))?;
         payload.validate()?;
         Ok(payload)
