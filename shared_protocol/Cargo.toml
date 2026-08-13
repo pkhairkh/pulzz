@@ -23,9 +23,13 @@ serde-big-array.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-zstd.workspace = true
 
+# Wave 18: zstd is optional on WASM (zstd-sys requires clang for wasm32 builds).
+# Native builds use the full P0-P5 compression pipeline; WASM builds fall back
+# to uncompressed payloads (the batch envelope format is still valid, just
+# without whole-batch zstd compression).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+zstd.workspace = true
 tokio.workspace = true
 x25519-dalek.workspace = true
 

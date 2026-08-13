@@ -302,6 +302,7 @@ impl Record {
     /// Compression level 3 provides ~400 MB/s encode, ~1 GB/s decode, with
     /// ~70% compression on structured data. The 10-byte overhead of zstd
     /// framing means payloads under ~50 bytes rarely benefit.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn maybe_compress_zstd(self) -> Self {
         const MIN_COMPRESS_SIZE: usize = 50;
         const ZSTD_LEVEL: i32 = 3;
@@ -325,12 +326,17 @@ impl Record {
         }
     }
 
+    /// WASM stub: zstd not available on wasm32 (zstd-sys requires clang).
+    #[cfg(target_arch = "wasm32")]
+    pub fn maybe_compress_zstd(self) -> Self { self }
+
     /// P0: Compress the record payload with Zstd using a trained dictionary.
     /// If dictionary compression succeeds and is smaller than both the
     /// original and raw-zstd, the PAYLOAD_ZSTD_DICT flag is set and the
     /// payload is [dict_id:u64_le][zstd_dict_compressed_data].
     /// Falls back to raw zstd (PAYLOAD_ZSTD) if that's better, or no
     /// compression if neither helps.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn maybe_compress_zstd_with_dict(
         self,
         dict: &crate::compress::ZstdDictionary,
@@ -378,6 +384,25 @@ impl Record {
         }
     }
 
+    /// WASM stub: zstd not available on wasm32.
+    #[cfg(target_arch = "wasm32")]
+    pub fn maybe_compress_zstd_with_dict(
+        self,
+        _dict: &crate::compress::ZstdDictionary,
+    ) -> Self { self }
+
+    /// WASM stub: zstd not available on wasm32.
+    #[cfg(target_arch = "wasm32")]
+    pub fn maybe_decompress_zstd_with_dict_provider<F>(
+        self,
+        _dict_provider: F,
+    ) -> Result<Self, WireError>
+    where
+        F: Fn(crate::SourceKind, u64) -> Option<Vec<u8>>,
+    {
+        Ok(self)
+    }
+
     /// P0: Decompress the record payload if it's compressed. Checks the
     /// PAYLOAD_ZSTD and PAYLOAD_ZSTD_DICT flags and decompresses accordingly.
     /// Returns the decompressed record with the compression flags cleared.
@@ -390,6 +415,7 @@ impl Record {
     /// The `dict_provider` closure takes (source_kind, dict_id) and returns
     /// the dictionary bytes if available. This allows the caller to maintain
     /// its own dictionary store.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn maybe_decompress_zstd_with_dict_provider<F>(
         self,
         dict_provider: F,
