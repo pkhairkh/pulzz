@@ -271,7 +271,7 @@ impl PyPulzzClient {
 
 #[pyfunction]
 fn pulzz_version() -> String {
-    "pulzZ 0.6.0-validated (Python via PyO3)".to_string()
+    "pulzZ 0.7.0-multi-record (Python via PyO3)".to_string()
 }
 
 /// Parse a raw wire-format Record from bytes and return (item_id, payload, record_type).
@@ -310,8 +310,8 @@ fn pulzz(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySecurityProfile>()?;
     m.add_class::<PySourceKind>()?;
     m.add_class::<PyPulzzClient>()?;
-    m.add("__version__", "0.6.0")?;
-    m.add("version_string", "pulzZ 0.6.0-validated (Python via PyO3)")?;
+    m.add("__version__", "0.7.0")?;
+    m.add("version_string", "pulzZ 0.7.0-multi-record (Python via PyO3)")?;
     m.add_function(wrap_pyfunction!(pulzz_version, m)?)?;
     m.add_function(wrap_pyfunction!(parse_record_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(parse_record, m)?)?;

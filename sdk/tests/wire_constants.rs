@@ -41,7 +41,7 @@ fn source_kind_discriminants_match_c_abi() {
 
 #[test]
 fn c_abi_version_matches_workspace_version() {
-    assert_eq!(pulzz_ffi::ABI_VERSION, 0x600);
+    assert_eq!(pulzz_ffi::ABI_VERSION, 0x700);
     assert!(pulzz_ffi::VERSION_STRING.starts_with("pulzZ"));
 }
 

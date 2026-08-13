@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "client"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "bincode",
@@ -1367,7 +1367,7 @@ dependencies = [
 
 [[package]]
 name = "pulzz-bench-collab"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rand 0.8.5",
  "serde",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "pulzz-ffi"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "client",
  "libc",
@@ -1389,7 +1389,7 @@ dependencies = [
 
 [[package]]
 name = "pulzz-python"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "pulzz-sdk",
  "pyo3",
@@ -1399,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "pulzz-sdk"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "client",
  "futures-util",
@@ -1415,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "pulzz-wasm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "js-sys",
  "pulzz-sdk",
@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "bincode",
@@ -1942,7 +1942,7 @@ dependencies = [
 
 [[package]]
 name = "shared_protocol"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "bincode",

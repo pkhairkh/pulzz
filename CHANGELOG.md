@@ -1,5 +1,77 @@
 # Changelog
 
+## v0.7.0-multi-record — 2026-08-14
+
+### Fixed — multi-record seq_no management
+
+- **seq_no management hardcoded** (the biggest blocker for real multi-record
+  usage). Every SDK send/emit path built records with `SeqNo(0)` hardcoded.
+  The `StreamProtector` validates `record.header.seq_no == expected_seq_no()`
+  and advances the ratchet after each `protect_transport_records` call, so
+  only the first record per session succeeded. Fixed: all send paths now
+  read `protector.expected_seq_no()` before `protect_transport_records`.
+  - `PulzzSession::send`: reads `(stream_id, seq_no)` from `protector()` before protect.
+  - `PulzzClient::build_exact_record`: reads `(stream_id, seq_no)` from `inner.protector()`.
+  - `PulzzClient::send` + `send_batch`: in network mode, RE-READS `(stream_id, seq_no)`
+    from `transport.session().protector()` (the real advancing protector), overwriting
+    the placeholder values. This fixes the placeholder-vs-transport gotcha.
+  - `ServerSession::emit_event` / `emit_batch`: already correct (use `header_context()`
+    which reads `expected_seq_no()`). No changes needed.
+- **Validated**: 5-record + 10-record WebSocket round-trip tests pass. 5-emit +
+  10-emit in-memory round-trip tests pass. The ratchet advances 0→1→2→3→4→...
+  correctly across all send/emit paths.
+
+### Added — PqMutualV1 (mutual PQ) end-to-end
+
+- **PqMutualV1 now works end-to-end over WebSocket.** The full 4-message
+  handshake (ClientHello → ServerHello → ClientFinish → ServerFinish) executes
+  over a real socket. ML-KEM-768 + ML-DSA-65 signature verification completes;
+  both sides derive matching AEAD protectors.
+- `PqMutualV1Credentials` type in `sdk/src/config.rs` — wraps
+  `IssuedClientCredential` + `ServerIdentityBundle` (client side).
+- `PqMutualV1ServerConfig` type in `sdk/src/config.rs` — wraps
+  `server_identity` + `server_signing_seed` + `revoked_client_ids` (server side).
+- `PulzzServer::bind_with_security(addr, config, pq_mutual_server_config)` method —
+  dispatches on `SecurityProfile` for the server config. For `PqMutualV1`,
+  requires `Some(PqMutualV1ServerConfig)`.
+- Re-exported `IssuedClientCredential` + `ServerIdentityBundle` from `pulzz_sdk` root.
+- **Validated**: 1-record + 5-record PqMutualV1 WebSocket round-trip tests pass.
+
+### Changed (breaking) — v0.7.0
+
+- **`SecurityProfile::PqMutualV1` is now a struct variant** carrying
+  `PqMutualV1Credentials` (was a unit variant in v0.6). Callers must update:
+  ```rust
+  // v0.6 (broken):
+  .security(SecurityProfile::PqMutualV1)
+  // v0.7:
+  .security(SecurityProfile::PqMutualV1(creds))
+  ```
+- `SecurityProfile` no longer derives `Copy` (because `PqMutualV1Credentials`
+  contains `Vec<u8>`). Use `.clone()` where needed.
+- `SecurityProfile::default()` changed from `PqMutualV1` to `PqSimpleV1`
+  (was misleading — `PqMutualV1` couldn't actually work without credentials).
+- `ClientConfig::default().security` changed from `PqMutualV1` to `PqSimpleV1`.
+- FFI + Python + WASM bindings: `PqMutualV1` maps to `PqSimpleV1` as a fallback
+  (these bindings don't yet expose the full credential API). Documented.
+
+### Added — tests
+
+- `sdk/tests/multi_record_ws.rs` — 5-record + 10-record WebSocket round-trip.
+- `sdk/tests/multi_emit_in_memory.rs` — 5-emit + 10-emit in-memory round-trip.
+- `sdk/tests/pq_mutual_ws_round_trip.rs` — 1-record + 5-record PqMutualV1 WebSocket round-trip.
+- `sdk/tests/security_profile_honored.rs` — updated (removed PqMutualV1 InvalidArg test,
+  since PqMutualV1 is now wired through; kept ClassicRef1 InvalidArg test).
+
+### Known limitations — v0.7.0
+
+- `ClassicRef1` not wired through `connect_with_config` (in-memory only).
+- `PulzzServer::emit_event`/`emit_batch` are in-memory only (error in network mode).
+- `PulzzWasmClient::connect` is not implemented for WASM.
+- FFI/Python/WASM bindings: `PqMutualV1` maps to `PqSimpleV1` (credential API not exposed).
+- **Fixed (v0.7)**: seq_no management — multiple records now work per session.
+- **Fixed (v0.7)**: PqMutualV1 — now wired through SDK + works over WebSocket.
+
 ## v0.6.0-validated — 2026-08-14
 
 ### Validated — 3 core deliverables
