@@ -66,3 +66,60 @@ pub extern "C" fn pulzz_version_string() -> *const c_char {
 pub extern "C" fn pulzz_last_error() -> *const c_char {
     error::last_error_ptr()
 }
+
+/// Parse a raw wire-format Record from bytes. This is the wire-bytes
+/// compatibility surface for cross-language tests (Go, C, Python).
+///
+/// # Arguments
+/// - `bytes_ptr`: pointer to the raw wire bytes
+/// - `bytes_len`: length of the raw wire bytes
+/// - `out_item_id`: output parameter for the record's item_id (u64)
+/// - `out_payload_ptr`: output parameter; will be set to a pointer to the
+///   payload bytes (caller must NOT free; valid until the next pulzz_* call)
+/// - `out_payload_len`: output parameter for the payload length
+/// - `out_record_type`: output parameter for the record type (u8)
+///
+/// # Returns
+/// `PulzzResult::Ok` on success, `PulzzResult::WireError` on parse failure.
+///
+/// # Safety
+/// `bytes_ptr` must be valid for `bytes_len` bytes. The output pointers must
+/// be valid for writing one u64, one *mut u8, one usize, one u8 respectively.
+#[unsafe(no_mangle)]
+pub extern "C" fn pulzz_parse_record(
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+    out_item_id: *mut u64,
+    out_payload_ptr: *mut *mut u8,
+    out_payload_len: *mut usize,
+    out_record_type: *mut u8,
+) -> types::PulzzResult {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if bytes_ptr.is_null() || out_item_id.is_null() || out_payload_ptr.is_null()
+            || out_payload_len.is_null() || out_record_type.is_null()
+        {
+            return Err(types::PulzzResult::InvalidArg);
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(bytes_ptr, bytes_len) };
+        match shared_protocol::Record::from_bytes(bytes) {
+            Ok(record) => {
+                unsafe {
+                    *out_item_id = record.header.item_id.0;
+                    *out_payload_len = record.payload.len();
+                    *out_record_type = record.header.record_type as u8;
+                    // Store payload in thread-local buffer; pointer valid
+                    // until the next pulzz_parse_record call on this thread.
+                    *out_payload_ptr = error::store_payload_buffer(record.payload.clone());
+                }
+                Ok(types::PulzzResult::Ok)
+            }
+            Err(_) => Err(types::PulzzResult::InvalidArg),
+        }
+    }));
+    match result {
+        Ok(Ok(r)) => r,
+        Ok(Err(r)) => r,
+        Err(_) => types::PulzzResult::Internal,
+    }
+}

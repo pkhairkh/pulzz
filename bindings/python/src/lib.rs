@@ -269,6 +269,36 @@ fn pulzz_version() -> String {
     "pulzZ 0.4.0-sdk (Python via PyO3)".to_string()
 }
 
+/// Parse a raw wire-format Record from bytes and return (item_id, payload, record_type).
+///
+/// This is the wire-bytes compatibility surface: Rust serializes a Record to
+/// bytes via `Record::to_bytes()`, Python parses the same bytes via this
+/// function. If both sides agree on item_id + payload + record_type, the wire
+/// format is compatible across languages.
+#[pyfunction]
+fn parse_record_bytes(bytes: &[u8]) -> PyResult<(u64, Vec<u8>, u8)> {
+    let record = shared_protocol::Record::from_bytes(bytes)
+        .map_err(|e| PyRuntimeError::new_err(format!("parse_record_bytes: {e}")))?;
+    Ok((
+        record.header.item_id.0,
+        record.payload,
+        record.header.record_type as u8,
+    ))
+}
+
+/// Parse a raw wire-format Record from bytes and return (item_id, payload_bytes, record_type).
+/// Same as parse_record_bytes but returns payload as bytes (not list of ints).
+#[pyfunction]
+fn parse_record<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<(u64, Bound<'py, PyBytes>, u8)> {
+    let record = shared_protocol::Record::from_bytes(bytes)
+        .map_err(|e| PyRuntimeError::new_err(format!("parse_record: {e}")))?;
+    Ok((
+        record.header.item_id.0,
+        PyBytes::new_bound(py, &record.payload),
+        record.header.record_type as u8,
+    ))
+}
+
 #[pymodule]
 fn pulzz(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCarrierKind>()?;
@@ -278,6 +308,8 @@ fn pulzz(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", "0.4.0")?;
     m.add("version_string", "pulzZ 0.4.0-sdk (Python via PyO3)")?;
     m.add_function(wrap_pyfunction!(pulzz_version, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_record_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_record, m)?)?;
     Ok(())
 }
 

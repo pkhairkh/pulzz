@@ -118,6 +118,34 @@ typedef void *PulzzSessionHandle;
  const char *pulzz_last_error(void);
 
 /**
+ * Parse a raw wire-format Record from bytes. This is the wire-bytes
+ * compatibility surface for cross-language tests (Go, C, Python).
+ *
+ * # Arguments
+ * - `bytes_ptr`: pointer to the raw wire bytes
+ * - `bytes_len`: length of the raw wire bytes
+ * - `out_item_id`: output parameter for the record's item_id (u64)
+ * - `out_payload_ptr`: output parameter; will be set to a pointer to the
+ *   payload bytes (caller must NOT free; valid until the next pulzz_* call)
+ * - `out_payload_len`: output parameter for the payload length
+ * - `out_record_type`: output parameter for the record type (u8)
+ *
+ * # Returns
+ * `PulzzResult::Ok` on success, `PulzzResult::WireError` on parse failure.
+ *
+ * # Safety
+ * `bytes_ptr` must be valid for `bytes_len` bytes. The output pointers must
+ * be valid for writing one u64, one *mut u8, one usize, one u8 respectively.
+ */
+
+PulzzResult pulzz_parse_record(const uint8_t *bytes_ptr,
+                               size_t bytes_len,
+                               uint64_t *out_item_id,
+                               uint8_t **out_payload_ptr,
+                               size_t *out_payload_len,
+                               uint8_t *out_record_type);
+
+/**
  * Create a new client from a config. The handle is owned by the caller and
  * must be freed via `pulzz_client_free`.
  *

@@ -32,3 +32,21 @@ pub fn last_error_ptr() -> *const c_char {
         None => ptr::null(),
     })
 }
+
+// Thread-local payload buffer for pulzz_parse_record. The pointer returned
+// to the caller is valid until the next pulzz_parse_record call on the same
+// thread. This avoids requiring the caller to free the buffer.
+thread_local! {
+    static PAYLOAD_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+}
+
+/// Store a payload buffer in thread-local storage and return a pointer to
+/// its contents. The pointer is valid until the next call to this function
+/// on the same thread.
+pub fn store_payload_buffer(payload: Vec<u8>) -> *mut u8 {
+    PAYLOAD_BUFFER.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        *buf = payload;
+        buf.as_mut_ptr()
+    })
+}
