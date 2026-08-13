@@ -1,5 +1,5 @@
 [workspace]
-members = ["client", "server", "shared_protocol"]
+members = ["client", "server", "shared_protocol", "sdk"]
 resolver = "2"
 
 [workspace.package]

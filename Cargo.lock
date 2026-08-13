@@ -1342,6 +1342,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulzz-sdk"
+version = "0.1.0"
+dependencies = [
+ "client",
+ "rand 0.8.5",
+ "serde",
+ "server",
+ "shared_protocol",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

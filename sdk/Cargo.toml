@@ -1,0 +1,25 @@
+[package]
+name = "pulzz-sdk"
+version.workspace = true
+edition.workspace = true
+description = "Idiomatic async Rust SDK for pulzZ predictive-memory transport."
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+shared_protocol = { path = "../shared_protocol" }
+client = { path = "../client" }
+server = { path = "../server" }
+tokio = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "net", "time", "io-util"] }
+rand = { workspace = true }
+
+[lib]
+name = "pulzz_sdk"
+path = "src/lib.rs"
