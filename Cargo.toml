@@ -1,5 +1,5 @@
 [workspace]
-members = ["client", "server", "shared_protocol", "sdk", "ffi", "bindings/wasm", "bindings/python"]
+members = ["client", "server", "shared_protocol", "sdk", "ffi", "bindings/wasm", "bindings/python", "benchmarks/collab_doc"]
 resolver = "2"
 
 [workspace.package]
