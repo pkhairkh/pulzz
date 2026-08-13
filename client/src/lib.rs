@@ -185,6 +185,7 @@ pub struct ClientState {
     template_registry: shared_protocol::TemplateRegistry,
     previous_versions: HashMap<u64, Vec<u8>>,
     // P5: Compressor cache for Zstd context reuse.
+    #[allow(dead_code)]
     compressor_cache: shared_protocol::CompressorCache,
 }
 
@@ -779,7 +780,7 @@ impl ClientState {
             );
             let decompressed = match &decompressed_result {
                 Ok(d) => d.clone(),
-                Err(e) => {
+                Err(_e) => {
                     // Decompression failed — this can happen if the client
                     // doesn't have the required base version for delta encoding
                     // (e.g., after a resync). Fall back to treating the payload
@@ -1254,7 +1255,7 @@ impl ClientState {
                     .map(|def| def.schema.source_kind)
             })
             .or_else(|| {
-                if payload.route_family == ControllerRouteFamily::Assembly {
+                if payload.route_family == ControllerRouteFamily::DirectState {
                     payload.assembly_ref.as_ref().and_then(|reference| {
                         self.assemblies
                             .get(&reference.assembly_id)
@@ -1525,7 +1526,7 @@ impl ClientState {
         payload: &PredictiveRouteDispatchPayload,
         staged: &StagedInlineRevisions,
     ) -> Result<Vec<u8>, ClientApplyError> {
-        if payload.route_family == ControllerRouteFamily::Assembly {
+        if payload.route_family == ControllerRouteFamily::DirectState {
             match payload
                 .assembly_mode
                 .or_else(|| payload.derived_assembly_mode())
@@ -1962,7 +1963,7 @@ impl ClientState {
         let payload: TransformInstancePayload = match decode_transform_instance_record(&record) {
             Ok(payload) => payload,
             Err(error) => {
-                self.record_route_outcome(ControllerRouteFamily::Transform, header.seq_no.0, false);
+                self.record_route_outcome(ControllerRouteFamily::DirectState, header.seq_no.0, false);
                 return Err(ClientApplyError::StateWire(error));
             }
         };
@@ -2019,7 +2020,7 @@ impl ClientState {
             Ok(())
         })();
         self.record_route_outcome(
-            ControllerRouteFamily::Transform,
+            ControllerRouteFamily::DirectState,
             header.seq_no.0,
             outcome.is_ok(),
         );
@@ -3677,171 +3678,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn client_installs_assembly_defs_and_executes_hybrid_assembly_routes() {
-        let mut state = ClientState::default();
-        let assembly = Assembly {
-            assembly_id: AssemblyId(77),
-            source_kind: shared_protocol::SourceKind::Text,
-            assembly_kind: shared_protocol::AssemblyKind::ContiguousMotif,
-            role_signature: shared_protocol::RoleSignature::default(),
-            slots: Vec::new(),
-            body: shared_protocol::AssemblyBody::from_literal(b"assembly-plane".to_vec()),
-            dependency_closure: shared_protocol::DependencyClosure::default(),
-            cue: shared_protocol::derive_sparse_cue(
-                shared_protocol::SourceKind::Text,
-                b"assembly-plane",
-            ),
-            lifecycle: shared_protocol::ObjectLifecycleMeta::default(),
-            canonical_length_min: 14,
-            canonical_length_max: 14,
-        };
-        state
-            .apply_record(assembly_def_record(SeqNo(0), ItemId(5), assembly.clone()))
-            .unwrap();
-        assert_eq!(state.installed_assembly_defs().len(), 1);
 
-        let assembly_ref = assembly_ref_from_payload(&AssemblyDefPayload::new(assembly.clone()));
-        let payload = PredictiveRouteDispatchPayload {
-            version: PredictiveRouteDispatchPayload::VERSION,
-            route_family: ControllerRouteFamily::Assembly,
-            route_kind: shared_protocol::RouteFamily::Assembly,
-            route_source_kind: Some(shared_protocol::SourceKind::Text),
-            assembly_mode: None,
-            precision_band: shared_protocol::PrecisionBand::Exact,
-            dependency_closure: vec![shared_protocol::ObjectDependency {
-                object_kind: shared_protocol::ObjectKind::Assembly,
-                object_id: format!("assembly:{}", assembly.assembly_id.0),
-                required_revision: 0,
-            }],
-            sync_risk: 0,
-            literal_bytes: Vec::new(),
-            assembly_ref: Some(assembly_ref.clone()),
-            inline_assembly_defs: Vec::new(),
-            inline_schema_defs: Vec::new(),
-            inline_dictionaries: Vec::new(),
-            inline_episode_hints: Vec::new(),
-            route_graph: shared_protocol::RouteGraphContract::default(),
-            contradiction_bytes: Vec::new(),
-            prg: None,
-            hybrid_route: Some(shared_protocol::HybridRoute {
-                route_family: ControllerRouteFamily::Assembly,
-                precision_band: shared_protocol::PrecisionBand::Exact,
-                assembly_mode: None,
-                output_len: assembly.body.output_len(),
-                dependency_closure: vec![shared_protocol::ObjectDependency {
-                    object_kind: shared_protocol::ObjectKind::Assembly,
-                    object_id: format!("assembly:{}", assembly.assembly_id.0),
-                    required_revision: 0,
-                }],
-                components: vec![HybridRouteComponent::Assembly(assembly_ref)],
-            }),
-        }
-        .with_derived_route_graph();
-        state
-            .apply_record(predictive_confirm_record(SeqNo(1), ItemId(5), payload))
-            .unwrap();
-        assert_eq!(
-            state.cache_entry(ItemId(5)).unwrap().object.exact_bytes,
-            b"assembly-plane"
-        );
-    }
-
-    #[test]
-    fn client_reloads_assembly_from_cache_and_resync_clears_plane() {
-        let mut state = ClientState::default();
-        let assembly = Assembly {
-            assembly_id: AssemblyId(88),
-            source_kind: shared_protocol::SourceKind::Text,
-            assembly_kind: shared_protocol::AssemblyKind::ContiguousMotif,
-            role_signature: shared_protocol::RoleSignature::default(),
-            slots: Vec::new(),
-            body: shared_protocol::AssemblyBody::from_literal(b"cache-backed".to_vec()),
-            dependency_closure: shared_protocol::DependencyClosure::default(),
-            cue: shared_protocol::derive_sparse_cue(
-                shared_protocol::SourceKind::Text,
-                b"cache-backed",
-            ),
-            lifecycle: shared_protocol::ObjectLifecycleMeta::default(),
-            canonical_length_min: 12,
-            canonical_length_max: 12,
-        };
-        state
-            .apply_record(assembly_def_record(SeqNo(0), ItemId(9), assembly.clone()))
-            .unwrap();
-        state.assemblies.clear();
-
-        let assembly_def_payload = AssemblyDefPayload::new(assembly.clone());
-        let assembly_ref = assembly_ref_from_payload(&assembly_def_payload);
-        let dependency = shared_protocol::ObjectDependency {
-            object_kind: shared_protocol::ObjectKind::Assembly,
-            object_id: format!("assembly:{}", assembly.assembly_id.0),
-            required_revision: 0,
-        };
-        let payload = PredictiveRouteDispatchPayload {
-            version: PredictiveRouteDispatchPayload::VERSION,
-            route_family: ControllerRouteFamily::Assembly,
-            route_kind: shared_protocol::RouteFamily::Assembly,
-            route_source_kind: Some(shared_protocol::SourceKind::Text),
-            assembly_mode: None,
-            precision_band: shared_protocol::PrecisionBand::Exact,
-            dependency_closure: vec![dependency.clone()],
-            sync_risk: 0,
-            literal_bytes: Vec::new(),
-            assembly_ref: Some(assembly_ref.clone()),
-            inline_assembly_defs: vec![assembly_def_payload],
-            inline_schema_defs: Vec::new(),
-            inline_dictionaries: Vec::new(),
-            inline_episode_hints: Vec::new(),
-            route_graph: shared_protocol::RouteGraphContract::default(),
-            contradiction_bytes: Vec::new(),
-            prg: Some(shared_protocol::PredictiveReconstructionGraph::new(
-                1,
-                4,
-                assembly.body.output_len(),
-                vec![shared_protocol::PrgNode {
-                    node_id: 1,
-                    kind: shared_protocol::PrgNodeKind::AssemblyRef,
-                    output_len: assembly.body.output_len(),
-                    dependency_contract: shared_protocol::PrgDependencyContract::default(),
-                    literal_bytes: Vec::new(),
-                    substrate_ref: None,
-                    assembly_ref: Some(assembly_ref),
-                    transform_ref: None,
-                    episode_ref: None,
-                    schema_ref: None,
-                    child_ids: Vec::new(),
-                    permutation: Vec::new(),
-                    repeat_count: None,
-                    select_index: None,
-                    slot_id: None,
-                    patch_offset: None,
-                    patch_remove_len: None,
-                    basis_node_id: None,
-                    guard_precision: None,
-                    branch_target: None,
-                }],
-                vec![format!("assembly:{}", assembly.assembly_id.0)],
-            )),
-            hybrid_route: None,
-        }
-        .with_derived_route_graph();
-        state
-            .apply_record(predictive_confirm_record(SeqNo(1), ItemId(9), payload))
-            .unwrap();
-        assert_eq!(
-            state.cache_entry(ItemId(9)).unwrap().object.exact_bytes,
-            b"cache-backed"
-        );
-
-        state.resync_plane(PlaneResyncPayload {
-            version: PlaneResyncPayload::VERSION,
-            plane: shared_protocol::MemoryPlane::Assembly,
-            object_kinds: vec![shared_protocol::ObjectKind::Assembly],
-            reset_predictors: false,
-        });
-        assert!(state.installed_assembly_defs().is_empty());
-    }
 
     #[test]
     fn client_ingests_replay_hints_with_structural_cues() {

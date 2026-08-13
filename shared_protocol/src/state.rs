@@ -963,7 +963,7 @@ impl PredictiveRouteDispatchPayload {
                 expected_route_kind: expected,
             });
         }
-        if self.route_family == ControllerRouteFamily::Assembly {
+        if self.route_family == ControllerRouteFamily::DirectState {
             let derived = self.derived_assembly_mode();
             if let (Some(mode), Some(derived_mode)) = (self.assembly_mode, derived) {
                 if mode != derived_mode {
@@ -1054,7 +1054,7 @@ impl PredictiveRouteDispatchPayload {
     }
 
     pub fn derived_assembly_mode(&self) -> Option<AssemblyRouteMode> {
-        if self.route_family != ControllerRouteFamily::Assembly {
+        if self.route_family != ControllerRouteFamily::DirectState {
             return None;
         }
         if self.installs_assembly_defs() {

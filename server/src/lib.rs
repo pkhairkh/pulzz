@@ -1441,7 +1441,7 @@ impl ServerState {
             .or_insert(0) += 1;
         // S2.5.b3: Track transform-path downgrades explicitly so demoted
         // transform routes are not silently counted as generic direct-state downgrades.
-        if planned_family == ControllerRouteFamily::Transform {
+        if planned_family == ControllerRouteFamily::DirectState {
             self.fallback_metrics.transform_demoted_downgrades += 1;
         }
     }
@@ -1470,7 +1470,7 @@ impl ServerState {
             block,
             true,
             planned_family == ControllerRouteFamily::ExactAtom,
-            planned_family == ControllerRouteFamily::Transform,
+            planned_family == ControllerRouteFamily::DirectState,
             reason,
         )
     }
@@ -2750,10 +2750,10 @@ impl ServerState {
                 let family = match pred.token {
                     1 => Some(ControllerRouteFamily::DirectState),
                     2 => Some(ControllerRouteFamily::ExactAtom),
-                    3 => Some(ControllerRouteFamily::Assembly),
-                    4 => Some(ControllerRouteFamily::Transform),
-                    5 => Some(ControllerRouteFamily::EpisodeCompletion),
-                    6 => Some(ControllerRouteFamily::SchemaExpansion),
+                    3 => Some(ControllerRouteFamily::DirectState),
+                    4 => Some(ControllerRouteFamily::DirectState),
+                    5 => Some(ControllerRouteFamily::DirectState),
+                    6 => Some(ControllerRouteFamily::DirectState),
                     7 => Some(ControllerRouteFamily::Hybrid),
                     _ => None,
                 };
@@ -2916,7 +2916,7 @@ impl ServerState {
                 }) {
                     // Transform dependency unavailable — fall back to direct state.
                     self.record_direct_state_downgrade(
-                        ControllerRouteFamily::Transform,
+                        ControllerRouteFamily::DirectState,
                         source_kind,
                         context_hash,
                         ctx.seq_no.0,
@@ -2926,15 +2926,15 @@ impl ServerState {
                         ctx,
                         item_id,
                         block,
-                        ControllerRouteFamily::Transform,
+                        ControllerRouteFamily::DirectState,
                         source_kind,
                         context_hash,
                         FallbackReason::DependencyUnavailable,
                     );
                 }
                 let route_graph = derived_dispatch_route_graph(
-                    ControllerRouteFamily::Transform,
-                    ControllerRouteFamily::Transform.route_family(),
+                    ControllerRouteFamily::DirectState,
+                    ControllerRouteFamily::DirectState.route_family(),
                     &dependency_closure,
                     0,
                     &[],
@@ -2945,8 +2945,8 @@ impl ServerState {
                 );
                 let payload = PredictiveRouteDispatchPayload {
                     version: PredictiveRouteDispatchPayload::VERSION,
-                    route_family: ControllerRouteFamily::Transform,
-                    route_kind: ControllerRouteFamily::Transform.route_family(),
+                    route_family: ControllerRouteFamily::DirectState,
+                    route_kind: ControllerRouteFamily::DirectState.route_family(),
                     route_source_kind: Some(source_kind),
                     assembly_mode: None,
                     precision_band: shared_protocol::PrecisionBand::default(),
@@ -2965,7 +2965,7 @@ impl ServerState {
                 }
                 .with_derived_route_graph();
                 self.record_route_outcome_detail(
-                    ControllerRouteFamily::Transform,
+                    ControllerRouteFamily::DirectState,
                     Some(source_kind),
                     context_hash,
                     ctx.seq_no.0,
@@ -2979,7 +2979,7 @@ impl ServerState {
                 self.emit_predictive_route_or_inflation_fallback(
                     ctx, item_id, RecordType::PredictiveCorrect, payload,
                     &runtime_material.exact_bytes,
-                    ControllerRouteFamily::Transform,
+                    ControllerRouteFamily::DirectState,
                     source_kind, context_hash,
                 )
             }
@@ -3034,15 +3034,15 @@ impl ServerState {
                             ctx,
                             item_id,
                             block.clone(),
-                            ControllerRouteFamily::SchemaExpansion,
+                            ControllerRouteFamily::DirectState,
                             source_kind,
                             context_hash,
                             FallbackReason::SchemaDependencyInadmissible,
                         );
                     }
                     let route_graph = derived_dispatch_route_graph(
-                        ControllerRouteFamily::SchemaExpansion,
-                        ControllerRouteFamily::SchemaExpansion.route_family(),
+                        ControllerRouteFamily::DirectState,
+                        ControllerRouteFamily::DirectState.route_family(),
                         &dependency_closure,
                         0,
                         &[],
@@ -3053,8 +3053,8 @@ impl ServerState {
                     );
                     let payload = PredictiveRouteDispatchPayload {
                         version: PredictiveRouteDispatchPayload::VERSION,
-                        route_family: ControllerRouteFamily::SchemaExpansion,
-                        route_kind: ControllerRouteFamily::SchemaExpansion.route_family(),
+                        route_family: ControllerRouteFamily::DirectState,
+                        route_kind: ControllerRouteFamily::DirectState.route_family(),
                         route_source_kind: Some(source_kind),
                         assembly_mode: None,
                         precision_band: candidate.precision_band,
@@ -3073,7 +3073,7 @@ impl ServerState {
                     }
                     .with_derived_route_graph();
                     self.record_route_outcome_detail(
-                        ControllerRouteFamily::SchemaExpansion,
+                        ControllerRouteFamily::DirectState,
                         Some(source_kind),
                         context_hash,
                         ctx.seq_no.0,
@@ -3087,7 +3087,7 @@ impl ServerState {
                     self.emit_predictive_route_or_inflation_fallback(
                         ctx, item_id, RecordType::PredictiveCorrect, payload,
                         &runtime_material.exact_bytes,
-                        ControllerRouteFamily::SchemaExpansion,
+                        ControllerRouteFamily::DirectState,
                         source_kind, context_hash,
                     )
                 } else {
@@ -3096,7 +3096,7 @@ impl ServerState {
                         ctx,
                         item_id,
                         block.clone(),
-                        ControllerRouteFamily::SchemaExpansion,
+                        ControllerRouteFamily::DirectState,
                         source_kind,
                         context_hash,
                         FallbackReason::NoViablePredictiveRoute,
@@ -3193,7 +3193,7 @@ impl ServerState {
                     shared_protocol::ObjectKind::PredictiveObject,
                 )?;
                 self.record_route_outcome_detail(
-                    ControllerRouteFamily::Assembly,
+                    ControllerRouteFamily::DirectState,
                     Some(source_kind),
                     context_hash,
                     ctx.seq_no.0,
@@ -3219,7 +3219,7 @@ impl ServerState {
                     shared_protocol::ObjectKind::PredictiveObject,
                 )?;
                 self.record_route_outcome_detail(
-                    ControllerRouteFamily::EpisodeCompletion,
+                    ControllerRouteFamily::DirectState,
                     Some(source_kind),
                     context_hash,
                     ctx.seq_no.0,
@@ -3644,7 +3644,7 @@ impl ServerState {
                 ctx,
                 item_id,
                 transient_exact_material(source_kind, bytes),
-                ControllerRouteFamily::Assembly,
+                ControllerRouteFamily::DirectState,
                 source_kind,
                 None,
                 FallbackReason::AssemblyStructuralizationFailed,
@@ -3703,7 +3703,7 @@ impl ServerState {
                 ctx,
                 item_id,
                 transient_exact_material(source_kind, bytes),
-                ControllerRouteFamily::Assembly,
+                ControllerRouteFamily::DirectState,
                 source_kind,
                 None,
                 FallbackReason::AssemblyStructuralizationFailed,
@@ -3741,8 +3741,8 @@ impl ServerState {
         };
         let dispatch_payload = PredictiveRouteDispatchPayload {
             version: PredictiveRouteDispatchPayload::VERSION,
-            route_family: ControllerRouteFamily::Assembly,
-            route_kind: ControllerRouteFamily::Assembly.route_family(),
+            route_family: ControllerRouteFamily::DirectState,
+            route_kind: ControllerRouteFamily::DirectState.route_family(),
             route_source_kind: Some(source_kind),
             assembly_mode: Some(assembly_mode),
             precision_band: shared_protocol::PrecisionBand::Exact,
@@ -3755,8 +3755,8 @@ impl ServerState {
             inline_dictionaries: Vec::new(),
             inline_episode_hints: Vec::new(),
             route_graph: derived_dispatch_route_graph(
-                ControllerRouteFamily::Assembly,
-                ControllerRouteFamily::Assembly.route_family(),
+                ControllerRouteFamily::DirectState,
+                ControllerRouteFamily::DirectState.route_family(),
                 &dependency_closure,
                 dispatch_sync_risk,
                 &[],
@@ -3773,7 +3773,7 @@ impl ServerState {
         self.emit_predictive_route_or_inflation_fallback(
             ctx, item_id, RecordType::PredictiveConfirm, dispatch_payload,
             bytes,
-            ControllerRouteFamily::Assembly,
+            ControllerRouteFamily::DirectState,
             source_kind,
             None,
         )
@@ -3983,8 +3983,8 @@ impl ServerState {
         let dependency_closure = episode_hint_dependencies(std::slice::from_ref(&candidate));
         let payload = PredictiveRouteDispatchPayload {
             version: PredictiveRouteDispatchPayload::VERSION,
-            route_family: ControllerRouteFamily::EpisodeCompletion,
-            route_kind: ControllerRouteFamily::EpisodeCompletion.route_family(),
+            route_family: ControllerRouteFamily::DirectState,
+            route_kind: ControllerRouteFamily::DirectState.route_family(),
             route_source_kind: Some(source_kind),
             assembly_mode: None,
             precision_band: candidate.precision_band,
@@ -3997,8 +3997,8 @@ impl ServerState {
             inline_dictionaries: Vec::new(),
             inline_episode_hints: vec![hint_payload],
             route_graph: derived_dispatch_route_graph(
-                ControllerRouteFamily::EpisodeCompletion,
-                ControllerRouteFamily::EpisodeCompletion.route_family(),
+                ControllerRouteFamily::DirectState,
+                ControllerRouteFamily::DirectState.route_family(),
                 &dependency_closure,
                 0,
                 &[],
@@ -4034,7 +4034,7 @@ impl ServerState {
         self.emit_predictive_route_or_inflation_fallback(
             ctx, item_id, RecordType::PredictiveConfirm, payload,
             &exact_bytes,
-            ControllerRouteFamily::EpisodeCompletion,
+            ControllerRouteFamily::DirectState,
             source_kind,
             Some(episode_context_hash),
         )
@@ -4082,7 +4082,7 @@ impl ServerState {
             }
         }
         let predictor = self.predictors.get(&item_id);
-        let predictor_state = predictor
+        let _predictor_state = predictor
             .map(|entry| {
                 shared_protocol::PredictorState::Ready(PredictorEntryMeta {
                     item_id,
@@ -5457,7 +5457,7 @@ mod tests {
         ).unwrap();
         assert_eq!(
             payload.route_family,
-            ControllerRouteFamily::EpisodeCompletion
+            ControllerRouteFamily::DirectState
         );
         assert_eq!(payload.inline_episode_hints.len(), 1);
         assert!(payload.prg.is_some());
@@ -5765,7 +5765,7 @@ mod tests {
             shared_protocol::PredictiveRouteDispatchPayload::decode(
                 &record.maybe_decompress_zstd().unwrap().payload
             ).unwrap();
-        assert_eq!(payload.route_family, ControllerRouteFamily::Assembly);
+        assert_eq!(payload.route_family, ControllerRouteFamily::DirectState);
         assert!(payload.installs_assembly_defs());
         assert_eq!(
             payload.assembly_mode,

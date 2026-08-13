@@ -1,8 +1,0 @@
-{
-  "burst_count": 1531,
-  "total_burst_payload_bytes": 100000019,
-  "max_burst_payload_bytes": 65536,
-  "average_fill_ratio": 0.9966552554977088,
-  "peak_buffered_payload_bytes": 65536,
-  "peak_buffered_frame_count": 276
-}

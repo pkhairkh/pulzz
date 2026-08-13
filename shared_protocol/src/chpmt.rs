@@ -25,33 +25,6 @@ pub enum RouteFamily {
     DirectState = 1,
     PredictiveConfirm = 2,
     PredictiveCorrect = 3,
-    /// Wave 9 T-9-b: SUSPENDED. The UCB1 bandit (Wave 8) rarely selects this
-    /// family due to low empirical success rates (inline-assembly inflation
-    /// per ISSUES.md I0). Retained for wire decode compatibility.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Suspended: inline-assembly inflation; use DirectState with P0-P5 compression"
-    )]
-    Assembly = 4,
-    /// DEMOTED from active architecture. Transform routes are not emitted by the
-    /// live server. Retained for wire compatibility and potential future reactivation.
-    #[deprecated(
-        since = "0.2.0",
-        note = "DEMOTED: no confirmed transform-class synchronization; never emitted"
-    )]
-    Transform = 5,
-    /// Wave 9 T-9-b: SUSPENDED. Heuristic candidate generation; rarely selected.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Suspended: heuristic candidate generation; use DirectState with P0-P5 compression"
-    )]
-    Schema = 6,
-    /// Wave 9 T-9-b: SUSPENDED. Approximate temporal prediction; rarely selected.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Suspended: approximate temporal prediction; use DirectState with P0-P5 compression"
-    )]
-    Episode = 7,
     Replay = 8,
     ExactAtom = 9,
 }
@@ -63,31 +36,6 @@ pub enum ControllerRouteFamily {
     #[default]
     DirectState = 1,
     ExactAtom = 2,
-    /// Wave 9 T-9-b: SUSPENDED. See RouteFamily::Assembly.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Suspended: inline-assembly inflation; use DirectState"
-    )]
-    Assembly = 3,
-    /// DEMOTED from active architecture. Transform routes are not emitted by the
-    /// live server. Retained for wire compatibility and potential future reactivation.
-    #[deprecated(
-        since = "0.2.0",
-        note = "DEMOTED: no confirmed transform-class synchronization; never emitted"
-    )]
-    Transform = 4,
-    /// Wave 9 T-9-b: SUSPENDED. See RouteFamily::Episode.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Suspended: approximate temporal prediction; use DirectState"
-    )]
-    EpisodeCompletion = 5,
-    /// Wave 9 T-9-b: SUSPENDED. See RouteFamily::Schema.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Suspended: heuristic candidate generation; use DirectState"
-    )]
-    SchemaExpansion = 6,
     Hybrid = 7,
 }
 
@@ -96,10 +44,6 @@ impl ControllerRouteFamily {
         match self {
             Self::DirectState => RouteFamily::DirectState,
             Self::ExactAtom => RouteFamily::ExactAtom,
-            Self::Assembly => RouteFamily::Assembly,
-            Self::Transform => RouteFamily::Transform,
-            Self::EpisodeCompletion => RouteFamily::PredictiveConfirm,
-            Self::SchemaExpansion => RouteFamily::Schema,
             Self::Hybrid => RouteFamily::PredictiveCorrect,
         }
     }
@@ -107,11 +51,8 @@ impl ControllerRouteFamily {
     pub const fn dispatch_record_type(self) -> crate::RecordType {
         match self {
             Self::DirectState => crate::RecordType::ExactState,
-            Self::ExactAtom | Self::Assembly | Self::EpisodeCompletion => {
-                crate::RecordType::PredictiveConfirm
-            }
-            Self::SchemaExpansion | Self::Hybrid => crate::RecordType::PredictiveCorrect,
-            Self::Transform => crate::RecordType::TransformCorrect,
+            Self::ExactAtom => crate::RecordType::PredictiveConfirm,
+            Self::Hybrid => crate::RecordType::PredictiveCorrect,
         }
     }
 }
@@ -4279,7 +4220,7 @@ mod tests {
         memory.append_activation(seed);
         memory.append_activation(target.clone());
         memory.record_route_outcome(
-            ControllerRouteFamily::EpisodeCompletion,
+            ControllerRouteFamily::DirectState,
             Some(target.source_kind),
             Some(target.context_hash),
             4,

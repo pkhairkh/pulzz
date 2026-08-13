@@ -2705,10 +2705,10 @@ impl ControllerRoutePlan {
         match self {
             Self::DirectState { .. } => ControllerRouteFamily::DirectState,
             Self::ExactAtom { .. } => ControllerRouteFamily::ExactAtom,
-            Self::Assembly { .. } => ControllerRouteFamily::Assembly,
-            Self::Transform { .. } => ControllerRouteFamily::Transform,
-            Self::EpisodeCompletion { .. } => ControllerRouteFamily::EpisodeCompletion,
-            Self::SchemaExpansion { .. } => ControllerRouteFamily::SchemaExpansion,
+            Self::Assembly { .. } => ControllerRouteFamily::DirectState,
+            Self::Transform { .. } => ControllerRouteFamily::DirectState,
+            Self::EpisodeCompletion { .. } => ControllerRouteFamily::DirectState,
+            Self::SchemaExpansion { .. } => ControllerRouteFamily::DirectState,
             Self::Hybrid { .. } => ControllerRouteFamily::Hybrid,
         }
     }
@@ -2804,7 +2804,7 @@ pub fn route_context_symbol_for_plan(
             sync_state: SyncStateBucket::from_sync_risk(4),
         },
         ControllerRoutePlan::Assembly { candidate, .. } => ContextTreeSymbol {
-            route_family: ControllerRouteFamily::Assembly,
+            route_family: ControllerRouteFamily::DirectState,
             delimiter_class: DelimiterClass::from_cue(selection.cue),
             slot_shape: SlotShapeBucket::from_slot_count(candidate.slots.len()),
             prior_schema_kind: selection.prior_schema_kind,
@@ -2814,7 +2814,7 @@ pub fn route_context_symbol_for_plan(
             sync_state: SyncStateBucket::from_sync_risk(candidate.dependency_sync_risk()),
         },
         ControllerRoutePlan::Transform { class, .. } => ContextTreeSymbol {
-            route_family: ControllerRouteFamily::Transform,
+            route_family: ControllerRouteFamily::DirectState,
             delimiter_class: DelimiterClass::from_cue(selection.cue),
             slot_shape: SlotShapeBucket::None,
             prior_schema_kind: selection.prior_schema_kind,
@@ -2824,7 +2824,7 @@ pub fn route_context_symbol_for_plan(
             sync_state: SyncStateBucket::from_sync_risk(8),
         },
         ControllerRoutePlan::EpisodeCompletion { candidate, .. } => ContextTreeSymbol {
-            route_family: ControllerRouteFamily::EpisodeCompletion,
+            route_family: ControllerRouteFamily::DirectState,
             delimiter_class: DelimiterClass::from_cue(selection.cue),
             slot_shape: SlotShapeBucket::None,
             prior_schema_kind: selection.prior_schema_kind,
@@ -2834,7 +2834,7 @@ pub fn route_context_symbol_for_plan(
             sync_state: SyncStateBucket::from_sync_risk(18),
         },
         ControllerRoutePlan::SchemaExpansion { candidate, .. } => ContextTreeSymbol {
-            route_family: ControllerRouteFamily::SchemaExpansion,
+            route_family: ControllerRouteFamily::DirectState,
             delimiter_class: DelimiterClass::from_cue(selection.cue),
             slot_shape: SlotShapeBucket::None,
             prior_schema_kind: Some(candidate.schema_kind),
@@ -3001,7 +3001,7 @@ fn resonance_state_for_plan(
             candidate,
             dependency_closure,
         } => ResonanceState {
-            route_family: ControllerRouteFamily::Assembly,
+            route_family: ControllerRouteFamily::DirectState,
             agreement_gain: candidate
                 .agreement_score()
                 .saturating_add(candidate.support_vote_count()),
@@ -3019,7 +3019,7 @@ fn resonance_state_for_plan(
             resonance_total: score.total,
         },
         ControllerRoutePlan::Transform { score, class, .. } => ResonanceState {
-            route_family: ControllerRouteFamily::Transform,
+            route_family: ControllerRouteFamily::DirectState,
             agreement_gain: class.lifecycle.support_count / 2,
             contradiction_burden: class.failure_score,
             decode_cost: class.mean_decode_steps,
@@ -3033,7 +3033,7 @@ fn resonance_state_for_plan(
             resonance_total: score.total,
         },
         ControllerRoutePlan::EpisodeCompletion { score, candidate } => ResonanceState {
-            route_family: ControllerRouteFamily::EpisodeCompletion,
+            route_family: ControllerRouteFamily::DirectState,
             agreement_gain: candidate.transition_match,
             contradiction_burden: candidate.branch_rank.0 as u32,
             decode_cost: 6,
@@ -3048,7 +3048,7 @@ fn resonance_state_for_plan(
             resonance_total: score.total,
         },
         ControllerRoutePlan::SchemaExpansion { score, candidate } => ResonanceState {
-            route_family: ControllerRouteFamily::SchemaExpansion,
+            route_family: ControllerRouteFamily::DirectState,
             agreement_gain: candidate
                 .cross_episode_support
                 .saturating_add(candidate.branch_consistency / 2),
@@ -3083,17 +3083,8 @@ fn route_families_incompatible(left: ControllerRouteFamily, right: ControllerRou
         && !matches!(
             (left, right),
             (
-                ControllerRouteFamily::Assembly,
-                ControllerRouteFamily::SchemaExpansion
-            ) | (
-                ControllerRouteFamily::SchemaExpansion,
-                ControllerRouteFamily::Assembly
-            ) | (
-                ControllerRouteFamily::EpisodeCompletion,
-                ControllerRouteFamily::SchemaExpansion
-            ) | (
-                ControllerRouteFamily::SchemaExpansion,
-                ControllerRouteFamily::EpisodeCompletion
+                ControllerRouteFamily::DirectState,
+                ControllerRouteFamily::DirectState
             )
         )
 }
@@ -3557,7 +3548,7 @@ pub fn choose_route_by_family(
     }
     for candidate in assemblies.iter().take(4) {
         let feedback = summarize_route_feedback(
-            ControllerRouteFamily::Assembly,
+            ControllerRouteFamily::DirectState,
             selection.source_kind,
             selection.context_hash,
             selection.tick,
@@ -3574,7 +3565,7 @@ pub fn choose_route_by_family(
         let dependency_closure = candidate.dependency_closure.dependencies.clone();
         let sync_risk = candidate.dependency_sync_risk();
         let signal = selection.governor_signal(
-            ControllerRouteFamily::Assembly,
+            ControllerRouteFamily::DirectState,
             SlotShapeBucket::from_slot_count(candidate.slots.len()),
             residual_cost,
             sync_risk,
@@ -3624,7 +3615,7 @@ pub fn choose_route_by_family(
     }
     for candidate in transforms.iter() {
         let feedback = summarize_route_feedback(
-            ControllerRouteFamily::Transform,
+            ControllerRouteFamily::DirectState,
             selection.source_kind,
             selection.context_hash,
             selection.tick,
@@ -3633,7 +3624,7 @@ pub fn choose_route_by_family(
         let schema_gain = schema_guidance.gain_for_transform(&candidate.class, &selection);
         let mismatch_penalty = schema_guidance.mismatch_penalty_for_transform(&candidate.class);
         let signal = selection.governor_signal(
-            ControllerRouteFamily::Transform,
+            ControllerRouteFamily::DirectState,
             SlotShapeBucket::None,
             candidate.class.mean_residual_bytes,
             8,
@@ -3684,7 +3675,7 @@ pub fn choose_route_by_family(
     }
     for candidate in episodes.iter().take(4) {
         let feedback = summarize_route_feedback(
-            ControllerRouteFamily::EpisodeCompletion,
+            ControllerRouteFamily::DirectState,
             selection.source_kind,
             selection.context_hash,
             selection.tick,
@@ -3692,7 +3683,7 @@ pub fn choose_route_by_family(
         );
         let sync_risk = 18;
         let signal = selection.governor_signal(
-            ControllerRouteFamily::EpisodeCompletion,
+            ControllerRouteFamily::DirectState,
             SlotShapeBucket::None,
             0,
             sync_risk,
@@ -3743,7 +3734,7 @@ pub fn choose_route_by_family(
     }
     for candidate in schemas.iter().take(4) {
         let feedback = summarize_route_feedback(
-            ControllerRouteFamily::SchemaExpansion,
+            ControllerRouteFamily::DirectState,
             selection.source_kind,
             selection.context_hash,
             selection.tick,
@@ -3751,7 +3742,7 @@ pub fn choose_route_by_family(
         );
         let sync_risk = candidate.dependency_closure.dependencies.len() as u32 * 4;
         let signal = selection.governor_signal(
-            ControllerRouteFamily::SchemaExpansion,
+            ControllerRouteFamily::DirectState,
             SlotShapeBucket::None,
             candidate.decode_burden,
             sync_risk,

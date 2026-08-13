@@ -727,11 +727,11 @@ impl RecordType {
             }
             Self::PredictiveConfirm => crate::RouteFamily::PredictiveConfirm,
             Self::PredictiveCorrect => crate::RouteFamily::PredictiveCorrect,
-            Self::TransformCorrect => crate::RouteFamily::Transform,
-            Self::AssemblyDef => crate::RouteFamily::Assembly,
-            Self::TransformDef => crate::RouteFamily::Transform,
-            Self::SchemaDef => crate::RouteFamily::Schema,
-            Self::EpisodeHint => crate::RouteFamily::Episode,
+            Self::TransformCorrect => crate::RouteFamily::DirectState,
+            Self::AssemblyDef => crate::RouteFamily::DirectState,
+            Self::TransformDef => crate::RouteFamily::DirectState,
+            Self::SchemaDef => crate::RouteFamily::DirectState,
+            Self::EpisodeHint => crate::RouteFamily::DirectState,
             Self::ReplayHint => crate::RouteFamily::Replay,
             Self::Rekey
             | Self::Resync

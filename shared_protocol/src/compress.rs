@@ -750,6 +750,7 @@ impl StructuralTemplate {
 }
 
 /// Classify a JSON value string into a slot kind.
+#[allow(dead_code)]
 fn classify_json_value(value: &str) -> SlotKind {
     let trimmed = value.trim();
     if trimmed.starts_with('"') {
@@ -1214,6 +1215,7 @@ pub struct DictionaryManager {
 
 impl DictionaryManager {
     /// Minimum bytes of new samples before retraining is triggered.
+    #[allow(dead_code)]
     const RETRAIN_THRESHOLD: usize = 32_768;
 
     pub fn new() -> Self {
@@ -1647,7 +1649,7 @@ pub fn decode_compressed_payload(
                 Ok(decompressed) => decompressed,
                 Err(_) => data.to_vec(), // Assume raw if Zstd decompress fails
             };
-            let batch = ColumnarBatch::decode_from_bytes(&batch_bytes)?;
+            let _batch = ColumnarBatch::decode_from_bytes(&batch_bytes)?;
             // For single-item payloads embedded in a columnar batch,
             // decode the batch and return the first item's data.
             // Note: columnar batches typically span multiple records;

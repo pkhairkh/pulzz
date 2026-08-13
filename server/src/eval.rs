@@ -9,8 +9,7 @@ use shared_protocol::{
     prepare_binary_source, prepare_json_source, prepare_text_source,
     BinaryDelta, CompressionStrategy, DictionaryManager,
     TemplateRegistry, StructuralTemplate,
-    select_strategy, zstd_compress_raw, zstd_decompress_raw,
-    RecordFlags, RecordType,
+    select_strategy, zstd_compress_raw,
 };
 use thiserror::Error;
 
@@ -557,9 +556,9 @@ fn evaluate_workload(
     // P0: Track zstd compression at the record level.
     let mut records_zstd_compressed = 0_usize;
     let mut records_not_compressed = 0_usize;
-    let mut zstd_savings_bytes = 0_usize;
-    let mut pre_zstd_payload_bytes = 0_usize;
-    let mut post_zstd_payload_bytes = 0_usize;
+    let zstd_savings_bytes = 0_usize;
+    let pre_zstd_payload_bytes = 0_usize;
+    let post_zstd_payload_bytes = 0_usize;
 
     for event in &trace {
         let record = match event.op {
@@ -670,7 +669,7 @@ fn evaluate_workload(
         }
     }
 
-    let bytes = summarize_bytes(
+    let _bytes = summarize_bytes(
         original_payload_bytes,
         encoded_payload_bytes,
         protected_wire_bytes,
@@ -680,7 +679,7 @@ fn evaluate_workload(
         pre_zstd_payload_bytes,
         post_zstd_payload_bytes,
     );
-    let latency = LatencyMetrics {
+    let _latency = LatencyMetrics {
         encode_total_ns,
         encode_avg_ns: average_ns(
             encode_total_ns,
@@ -692,7 +691,7 @@ fn evaluate_workload(
             payload_event_count + codec_modes.control as usize,
         ),
     };
-    let exactness = ExactnessMetrics {
+    let _exactness = ExactnessMetrics {
         checked_events: exact_checked,
         exact_round_trips,
         exact_round_trip_rate: if exact_checked == 0 {
@@ -711,10 +710,10 @@ fn evaluate_workload(
     for family in [
         shared_protocol::ControllerRouteFamily::DirectState,
         shared_protocol::ControllerRouteFamily::ExactAtom,
-        shared_protocol::ControllerRouteFamily::Assembly,
-        shared_protocol::ControllerRouteFamily::Transform,
-        shared_protocol::ControllerRouteFamily::EpisodeCompletion,
-        shared_protocol::ControllerRouteFamily::SchemaExpansion,
+        shared_protocol::ControllerRouteFamily::DirectState,
+        shared_protocol::ControllerRouteFamily::DirectState,
+        shared_protocol::ControllerRouteFamily::DirectState,
+        shared_protocol::ControllerRouteFamily::DirectState,
         shared_protocol::ControllerRouteFamily::Hybrid,
     ] {
         let family_events = route_stats
@@ -730,7 +729,7 @@ fn evaluate_workload(
         }
     }
     let fallback_metrics = server.state().fallback_metrics();
-    let predictive_memory = PredictiveEvalMetrics {
+    let _predictive_memory = PredictiveEvalMetrics {
         route_family_share,
         sync_risk_fallback_count: 0,
         exact_atom_direct_state_fallback_count: fallback_metrics
@@ -747,7 +746,7 @@ fn evaluate_workload(
     // P0-P5: Run the compression pipeline evaluation on the same trace data.
     // This evaluates how well the new compression modules perform independently
     // of the server's existing predictive route planning.
-    let compress_metrics = evaluate_compress_pipeline(&trace);
+    let _compress_metrics = evaluate_compress_pipeline(&trace);
 
     // P0: Read server-side compression metrics (before AEAD protection).
     let server_comp = server.state().compression_metrics();
@@ -792,10 +791,10 @@ fn evaluate_workload(
     for family in [
         shared_protocol::ControllerRouteFamily::DirectState,
         shared_protocol::ControllerRouteFamily::ExactAtom,
-        shared_protocol::ControllerRouteFamily::Assembly,
-        shared_protocol::ControllerRouteFamily::Transform,
-        shared_protocol::ControllerRouteFamily::EpisodeCompletion,
-        shared_protocol::ControllerRouteFamily::SchemaExpansion,
+        shared_protocol::ControllerRouteFamily::DirectState,
+        shared_protocol::ControllerRouteFamily::DirectState,
+        shared_protocol::ControllerRouteFamily::DirectState,
+        shared_protocol::ControllerRouteFamily::DirectState,
         shared_protocol::ControllerRouteFamily::Hybrid,
     ] {
         let family_events = route_stats

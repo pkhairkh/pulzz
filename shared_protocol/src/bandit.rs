@@ -113,15 +113,15 @@ mod tests {
     #[test]
     fn pick_prefers_higher_mean_when_both_arms_well_pulled() {
         let mut selector = Ucb1RouteSelector::new();
-        selector.record_outcomes(ControllerRouteFamily::Assembly, 7, 3);
+        selector.record_outcomes(ControllerRouteFamily::ExactAtom, 7, 3);
         selector.record_outcomes(ControllerRouteFamily::DirectState, 2, 8);
         let winner = selector
             .pick(&[
                 ControllerRouteFamily::DirectState,
-                ControllerRouteFamily::Assembly,
+                ControllerRouteFamily::ExactAtom,
             ])
             .copied()
             .expect("non-empty candidate list");
-        assert_eq!(winner, ControllerRouteFamily::Assembly);
+        assert_eq!(winner, ControllerRouteFamily::ExactAtom);
     }
 }
