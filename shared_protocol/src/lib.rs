@@ -1,6 +1,7 @@
 // Shared protocol surface for CHPMT predictive-memory transport.
 // Active CHPMT routing, predictive caches, and predictor state are cue/object-native; native exact-state objects are the only active payload form.
 
+pub mod bandit;
 pub mod bootstrap;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod carrier;
@@ -12,6 +13,7 @@ pub mod datagram;
 pub mod kernels;
 pub mod protection;
 pub mod protocol;
+pub mod pst;
 pub mod source;
 pub mod state;
 pub mod state_policy;
@@ -19,6 +21,7 @@ pub mod transport;
 #[doc = "Byte-latent helpers for native exact-state payload encoding and decode."]
 pub mod vector;
 
+pub use bandit::*;
 pub use bootstrap::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use carrier::*;
