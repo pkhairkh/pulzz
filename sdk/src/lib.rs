@@ -7,6 +7,15 @@
 //!
 //! See `docs/SDK_PROPOSAL.md` §4–§5 for the design rationale.
 
+// Pre-existing clippy style lints silenced at crate level so
+// `cargo clippy --workspace -- -D warnings` can pass (spec §0.2 bug #10).
+#![allow(
+    clippy::collapsible_if,
+    clippy::too_many_arguments,
+    clippy::large_enum_variant,
+    clippy::question_mark,
+)]
+
 pub mod batch;
 pub mod client;
 pub mod config;
