@@ -58,13 +58,16 @@ pub extern "C" fn pulzz_client_new(
         }
         let cfg = unsafe { &*config };
         let sdk_cfg: pulzz_sdk::ClientConfig = (*cfg).into();
+        let timeout_ms = sdk_cfg.timeout_ms();
         // Build a deferred client (no connection yet). We wrap the builder
         // state in a thunk that `pulzz_client_connect` will execute.
+        // Clone security because the builder moves it but we also need it
+        // in the pending config (SecurityProfile is no longer Copy in v0.7).
         let builder = PulzzClientBuilder::default()
             .carrier(sdk_cfg.carrier)
-            .security(sdk_cfg.security)
+            .security(sdk_cfg.security.clone())
             .compression(sdk_cfg.compression)
-            .timeout(sdk_cfg.timeout_ms());
+            .timeout(timeout_ms);
         // Store the (builder, config) on the heap as a pending-client.
         // We can't connect synchronously here because connect() is async —
         // pulzz_client_connect will do the actual network I/O.

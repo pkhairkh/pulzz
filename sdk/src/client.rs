@@ -345,12 +345,13 @@ pub struct PulzzClientBuilder {
 impl Default for PulzzClientBuilder {
     fn default() -> Self {
         let cfg = ClientConfig::default();
+        let timeout_ms = cfg.timeout_ms();
         Self {
             carrier: cfg.carrier,
             security: cfg.security,
             compression: cfg.compression,
             batch_size: cfg.batch_size,
-            timeout_ms: cfg.timeout_ms(),
+            timeout_ms,
         }
     }
 }
@@ -425,21 +426,21 @@ impl PulzzClient {
         url: &str,
         config: ClientConfig,
     ) -> Result<Self, SdkError> {
-        // Honor the caller's SecurityProfile choice. Only PqSimpleV1 is
-        // wired through the SDK's network connect path today. The other
-        // profiles require credentials or APIs not yet exposed — fail
-        // fast with a clear InvalidArg error instead of silently mapping
-        // them to PqSimple (which was the previous buggy behavior, bug #1).
-        match config.security {
-            SecurityProfile::PqSimpleV1 => {}
-            SecurityProfile::PqMutualV1 => {
-                return Err(SdkError::invalid_arg(
-                    "PqMutualV1 is not yet wired through PulzzClient::connect_with_config; \
-                     it requires IssuedClientCredential + ServerIdentityBundle inputs \
-                     that the SDK does not yet expose. Use PqSimpleV1 for network connect, \
-                     or PulzzClient::from_session for in-memory testing.",
-                ));
-            }
+        // Honor the caller's SecurityProfile choice. PqSimpleV1 and
+        // PqMutualV1 are both wired through connect_with_config. ClassicRef1
+        // has no network path (in-memory only).
+        let (security_cfg, protection_profile) = match config.security.clone() {
+            SecurityProfile::PqSimpleV1 => (
+                client::ClientSecurityConfig::PqSimple,
+                shared_protocol::ProtectionProfileKind::PqSimpleV1,
+            ),
+            SecurityProfile::PqMutualV1(creds) => (
+                client::ClientSecurityConfig::PqMutual {
+                    issued_credential: creds.issued_credential,
+                    expected_server_identity: creds.expected_server_identity,
+                },
+                shared_protocol::ProtectionProfileKind::PqMutualV1,
+            ),
             SecurityProfile::ClassicRef1 => {
                 return Err(SdkError::invalid_arg(
                     "ClassicRef1 is not wired through PulzzClient::connect_with_config; \
@@ -448,7 +449,7 @@ impl PulzzClient {
                      for in-memory classic-ref1 testing.",
                 ));
             }
-        }
+        };
         let carrier_kind = match config.carrier {
             CarrierKind::WebSocket => client::NativeClientCarrierKind::WebSocket,
             CarrierKind::Tcp => client::NativeClientCarrierKind::Tcp,
@@ -457,11 +458,10 @@ impl PulzzClient {
             CarrierKind::WebTransport => client::NativeClientCarrierKind::WebTransportDatagram,
             CarrierKind::UdpDatagram => client::NativeClientCarrierKind::Udp,
         };
-        let security_cfg = client::ClientSecurityConfig::PqSimple;
         let stream_id = StreamId(1);
         let direction = shared_protocol::StreamDirection::ServerToClient;
         let session = shared_protocol::TransportSessionConfig {
-            protection_profile: shared_protocol::ProtectionProfileKind::PqSimpleV1,
+            protection_profile,
             ..Default::default()
         };
         let connect_config = client::ClientConnectConfig {

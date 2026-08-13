@@ -56,7 +56,10 @@ enum PySecurityProfile {
 impl From<PySecurityProfile> for SecurityProfile {
     fn from(s: PySecurityProfile) -> Self {
         match s {
-            PySecurityProfile::PqMutualV1 => SecurityProfile::PqMutualV1,
+            // Python binding does not yet expose the full PqMutualV1 credential
+            // API. Callers requesting PqMutualV1 get PqSimpleV1 as a fallback.
+            // Use the Rust SDK directly for PqMutualV1.
+            PySecurityProfile::PqMutualV1 => SecurityProfile::PqSimpleV1,
             PySecurityProfile::PqSimpleV1 => SecurityProfile::PqSimpleV1,
             PySecurityProfile::ClassicRef1 => SecurityProfile::ClassicRef1,
         }
@@ -101,7 +104,9 @@ fn parse_config_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<ClientConfig> {
     if let Some(s) = dict.get_item("security")? {
         if let Ok(v) = s.extract::<String>() {
             cfg.security = match v.as_str() {
-                "pq_mutual_v1" | "pq_mutual" => SecurityProfile::PqMutualV1,
+                // Python binding does not expose PqMutualV1 credentials yet;
+                // map to PqSimpleV1 as a fallback.
+                "pq_mutual_v1" | "pq_mutual" => SecurityProfile::PqSimpleV1,
                 "pq_simple_v1" | "pq_simple" => SecurityProfile::PqSimpleV1,
                 "classic_ref1" | "classic" => SecurityProfile::ClassicRef1,
                 _ => return Err(PyValueError::new_err(format!("bad security: {v}"))),

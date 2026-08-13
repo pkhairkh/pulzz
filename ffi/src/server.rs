@@ -37,10 +37,11 @@ pub extern "C" fn pulzz_server_new(
         }
         let cfg = unsafe { &*config };
         let sdk_cfg: pulzz_sdk::ClientConfig = (*cfg).into();
+        let timeout_ms = sdk_cfg.timeout_ms();
         let builder = PulzzServerBuilder::default()
             .carrier(sdk_cfg.carrier)
-            .security(sdk_cfg.security)
-            .timeout(sdk_cfg.timeout_ms());
+            .security(sdk_cfg.security.clone())
+            .timeout(timeout_ms);
         let pending = PendingOrServer::Pending { builder, config: sdk_cfg };
         let boxed = Box::new(pending);
         unsafe { *out_server = Box::into_raw(boxed) as PulzzServerHandle; }

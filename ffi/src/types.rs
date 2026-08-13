@@ -94,7 +94,11 @@ pub enum PulzzSecurityProfile {
 impl From<PulzzSecurityProfile> for SecurityProfile {
     fn from(s: PulzzSecurityProfile) -> Self {
         match s {
-            PulzzSecurityProfile::PqMutualV1 => SecurityProfile::PqMutualV1,
+            // FFI does not yet expose the full PqMutualV1 credential API
+            // (IssuedClientCredential + ServerIdentityBundle require structured
+            // serialization). FFI callers requesting PqMutualV1 get PqSimpleV1
+            // as a fallback. Use the Rust SDK directly for PqMutualV1.
+            PulzzSecurityProfile::PqMutualV1 => SecurityProfile::PqSimpleV1,
             PulzzSecurityProfile::PqSimpleV1 => SecurityProfile::PqSimpleV1,
             PulzzSecurityProfile::ClassicRef1 => SecurityProfile::ClassicRef1,
         }

@@ -56,6 +56,20 @@ impl PulzzServer {
         addr: &str,
         config: ClientConfig,
     ) -> Result<Self, SdkError> {
+        // Delegate to bind_with_security, defaulting to PqSimpleV1 server config.
+        Self::bind_with_security(addr, config, None).await
+    }
+
+    /// Bind with a fully-specified config + explicit server security config.
+    ///
+    /// For `SecurityProfile::PqMutualV1(_)`, pass `Some(pq_mutual_server_config)`
+    /// to configure the server's ML-DSA-65 identity + signing seed. For
+    /// `PqSimpleV1`, pass `None` (the server uses the default PqSimple config).
+    pub async fn bind_with_security(
+        addr: &str,
+        config: ClientConfig,
+        pq_mutual_server_config: Option<crate::config::PqMutualV1ServerConfig>,
+    ) -> Result<Self, SdkError> {
         let carrier_kind = match config.carrier {
             CarrierKind::WebSocket => server::NativeServerCarrierKind::WebSocket,
             CarrierKind::Tcp => server::NativeServerCarrierKind::Tcp,
@@ -64,16 +78,44 @@ impl PulzzServer {
             CarrierKind::WebTransport => server::NativeServerCarrierKind::WebTransportDatagram,
             CarrierKind::UdpDatagram => server::NativeServerCarrierKind::Udp,
         };
+        let (protection_profile, server_security) = match &config.security {
+            crate::config::SecurityProfile::PqSimpleV1 => (
+                shared_protocol::ProtectionProfileKind::PqSimpleV1,
+                shared_protocol::ServerSecurityConfig::PqSimple {
+                    bootstrap: shared_protocol::PqSimpleServerBootstrapConfig::default(),
+                },
+            ),
+            crate::config::SecurityProfile::PqMutualV1(_) => {
+                let srv_cfg = pq_mutual_server_config.ok_or_else(|| {
+                    SdkError::invalid_arg(
+                        "PqMutualV1 server bind requires a PqMutualV1ServerConfig \
+                         (server_identity + server_signing_seed + revoked_client_ids). \
+                         Pass it via bind_with_security(addr, config, Some(srv_cfg)).",
+                    )
+                })?;
+                (
+                    shared_protocol::ProtectionProfileKind::PqMutualV1,
+                    shared_protocol::ServerSecurityConfig::PqMutual {
+                        server_identity: srv_cfg.server_identity,
+                        server_signing_seed: srv_cfg.server_signing_seed,
+                        revoked_client_ids: srv_cfg.revoked_client_ids,
+                    },
+                )
+            }
+            crate::config::SecurityProfile::ClassicRef1 => {
+                return Err(SdkError::invalid_arg(
+                    "ClassicRef1 is not wired through PulzzServer::bind; \
+                     use from_protector for in-memory classic-ref1 testing.",
+                ));
+            }
+        };
         let bootstrap = shared_protocol::BootstrapConfig::default();
         let session_cfg = shared_protocol::TransportSessionConfig {
-            protection_profile: shared_protocol::ProtectionProfileKind::PqSimpleV1,
+            protection_profile,
             bootstrap,
             ..Default::default()
         };
         let limits = server::transport::ConnectionLimits::default();
-        let server_security = shared_protocol::ServerSecurityConfig::PqSimple {
-            bootstrap: shared_protocol::PqSimpleServerBootstrapConfig::default(),
-        };
         let bootstrap_policy = server::transport::BootstrapPolicy::new(
             shared_protocol::BootstrapServerConfig {
                 stream_id: shared_protocol::StreamId(1),

@@ -6,27 +6,69 @@
 
 use std::time::Duration;
 
+// Re-export the PqMutualV1 credential types from shared_protocol so callers
+// don't have to depend on shared_protocol directly.
+pub use shared_protocol::bootstrap::{IssuedClientCredential, ServerIdentityBundle};
+use shared_protocol::bootstrap::BOOTSTRAP_SIGNING_SEED_LEN;
+
+/// Credentials required for the PqMutualV1 (mutual PQ) handshake.
+///
+/// The client presents `issued_credential` (proving its identity to the
+/// server via ML-DSA-65) and `expected_server_identity` (the server identity
+/// it expects to authenticate). Both sides must agree on these for the
+/// 4-message handshake (ClientHello → ServerHello → ClientFinish →
+/// ServerFinish) to complete.
+///
+/// Use `shared_protocol::bootstrap::issue_client_credential(...)` to mint
+/// a credential (typically by the server operator during provisioning).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PqMutualV1Credentials {
+    pub issued_credential: IssuedClientCredential,
+    pub expected_server_identity: ServerIdentityBundle,
+}
+
+/// Server-side configuration for the PqMutualV1 handshake.
+///
+/// The server holds `server_identity` (its public identity bundle) +
+/// `server_signing_seed` (the ML-DSA-65 secret seed used to sign during
+/// the handshake) + `revoked_client_ids` (runtime revocation list).
+///
+/// Use `shared_protocol::bootstrap::issue_server_identity(...)` to mint
+/// the identity bundle from a seed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PqMutualV1ServerConfig {
+    pub server_identity: ServerIdentityBundle,
+    pub server_signing_seed: [u8; BOOTSTRAP_SIGNING_SEED_LEN],
+    pub revoked_client_ids: Vec<String>,
+}
+
 /// Selects which PQC (or classical reference) handshake to use.
 ///
-/// `PqMutualV1` requires native crypto (x25519-dalek + ml-dsa) and is not
-/// available in WASM builds. `PqSimpleV1` is the WASM default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// `PqMutualV1` carries the client credentials required for the mutual-PQ
+/// handshake. `PqSimpleV1` is the default (no credentials needed).
+/// `ClassicRef1` is in-memory only (not wired through connect).
+///
+/// **Breaking change (v0.7):** `PqMutualV1` was a unit variant in v0.6;
+/// it now carries `PqMutualV1Credentials`. Callers must update from
+/// `.security(SecurityProfile::PqMutualV1)` to
+/// `.security(SecurityProfile::PqMutualV1(creds))`.
+///
+/// `SecurityProfile` is no longer `Copy` (because `PqMutualV1Credentials`
+/// contains `Vec<u8>`). Use `.clone()` where needed.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum SecurityProfile {
-    /// ML-KEM-768 + ML-DSA-65 (full PQ mutual auth).
+    /// ML-KEM-768 + ML-DSA-65 (full PQ mutual auth, 4-message handshake).
+    /// Carries the client credentials required for the handshake.
+    PqMutualV1(PqMutualV1Credentials),
+    /// ML-KEM-768 only (PQ KEM, no signatures, 2-message handshake).
+    /// Default — no credentials needed.
     #[default]
-    PqMutualV1,
-    /// ML-KEM-768 only (PQ KEM, no signatures).
     PqSimpleV1,
-    /// X25519 + Ed25519 (classical, for testing only).
+    /// X25519 + Ed25519 (classical, for in-memory testing only).
     ClassicRef1,
 }
 
 /// Underlying transport carrier for a session.
-///
-/// Not all carriers are available in every build target — see
-/// `docs/SDK_PROPOSAL.md` §11 (backend parity matrix). On WASM only
-/// `WebSocket` and `WebTransport` are usable; the others return
-/// `SdkError::UnsupportedCarrier` at connect time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CarrierKind {
     #[default]
@@ -39,9 +81,6 @@ pub enum CarrierKind {
 }
 
 /// Compression configuration for batched emission.
-///
-/// On WASM `enabled` should be `false` (zstd-sys requires clang for
-/// wasm32). The batch envelope still works; payloads are uncompressed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompressionConfig {
     pub enabled: bool,
@@ -83,7 +122,7 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            security: SecurityProfile::PqMutualV1,
+            security: SecurityProfile::PqSimpleV1,
             carrier: CarrierKind::WebSocket,
             compression: CompressionConfig::default(),
             batch_size: None,

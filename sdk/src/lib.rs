@@ -27,7 +27,10 @@ pub mod session;
 
 pub use batch::{BatchBuilder, BuiltBatch};
 pub use client::{PulzzClient, PulzzClientBuilder};
-pub use config::{CarrierKind, ClientConfig, CompressionConfig, SecurityProfile};
+pub use config::{
+    CarrierKind, ClientConfig, CompressionConfig, PqMutualV1Credentials,
+    PqMutualV1ServerConfig, SecurityProfile,
+};
 pub use error::SdkError;
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::{PulzzServer, PulzzServerBuilder};
