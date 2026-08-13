@@ -1,0 +1,16 @@
+{
+  "trace": "low_locality",
+  "path": "/home/z/my-project/work/pulzz/benchmarks/collab_doc/corpus/trace_1000_low_locality.jsonl",
+  "n_edits": 1000,
+  "naive_total_bytes": 77412,
+  "predictive_total_bytes": 76060,
+  "naive_avg_bytes_per_edit": 77.412,
+  "predictive_avg_bytes_per_edit": 76.06,
+  "reduction_pct": 1.7464992507621557,
+  "edit_type_counts": {
+    "delete": 36,
+    "replace": 874,
+    "append": 53,
+    "insert": 37
+  }
+}

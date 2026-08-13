@@ -13,12 +13,16 @@
 //!
 //! See `DESIGN.md` for the full design.
 
+// Benchmark crate — allow style lints that would be fixed in production code.
+#![allow(clippy::manual_strip)]
+
 use shared_protocol::{ItemId, Record, RecordHeader, RecordType, RecordFlags, StreamId,
                      EpochId, SeqNo, CodecMode, PROTOCOL_VERSION, AUTH_TAG_LEN,
                      SourceKind};
 
 /// A single edit in a collaborative-doc trace.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "edit_type", rename_all = "lowercase")]
 pub enum Edit {
     /// Insert a new line at `line_index` with `content`.
     Insert { line_index: usize, content: String },
@@ -48,11 +52,14 @@ impl DocState {
     pub fn apply(&mut self, edit: &Edit) -> ItemId {
         match edit {
             Edit::Insert { line_index, content } => {
-                self.lines.insert(*line_index, content.clone());
-                ItemId(*line_index as u64)
+                let idx = (*line_index).min(self.lines.len());
+                self.lines.insert(idx, content.clone());
+                ItemId(idx as u64)
             }
             Edit::Delete { line_index } => {
-                self.lines.remove(*line_index);
+                if *line_index < self.lines.len() {
+                    self.lines.remove(*line_index);
+                }
                 ItemId(*line_index as u64)
             }
             Edit::Replace { line_index, content } => {
@@ -78,25 +85,25 @@ impl DocState {
 
 /// Build a naive ExactState record for an edit.
 ///
-/// For insert/replace/append: sends the full new line content.
+/// For insert/replace: sends the full new line content.
+/// For append: sends the full new line (old + appended) — the naive server
+///   doesn't know the client has the old content, so it resends everything.
 /// For delete: sends a MemoryRetire record.
-pub fn naive_record_for_edit(edit: &Edit) -> Record {
+pub fn naive_record_for_edit(edit: &Edit, old_content: Option<&str>) -> Record {
     match edit {
         Edit::Insert { line_index, content }
         | Edit::Replace { line_index, content } => {
             build_exact_state_record(ItemId(*line_index as u64), content.as_bytes())
         }
         Edit::Append { line_index, appended } => {
-            // Naive: send the full new line (appended content is part of it,
-            // but we don't have the old content here — just send the appended
-            // bytes as the "new content" for benchmarking purposes, matching
-            // what a naive server would do if it only knew the delta).
-            // For a fair naive baseline, the server sends the FULL new line.
-            // Since we don't track old content in the Edit, we send the
-            // appended text as a proxy (this is actually favorable to naive
-            // — it understates naive wire bytes, making the predictive
-            // advantage harder to prove).
-            build_exact_state_record(ItemId(*line_index as u64), appended.as_bytes())
+            // Naive: send the FULL new line (old + appended). The naive server
+            // doesn't track what the client already has — it resends the
+            // complete line every time.
+            let full_new = match old_content {
+                Some(old) => format!("{old}{appended}"),
+                None => appended.clone(),
+            };
+            build_exact_state_record(ItemId(*line_index as u64), full_new.as_bytes())
         }
         Edit::Delete { line_index } => {
             build_memory_retire_record(ItemId(*line_index as u64))
@@ -223,7 +230,7 @@ mod tests {
             line_index: 0,
             appended: " world".to_string(),
         };
-        let record = naive_record_for_edit(&edit);
+        let record = naive_record_for_edit(&edit, Some("hello"));
         assert_eq!(record.header.record_type, RecordType::ExactState);
         assert!(record.payload.len() > 1); // source kind byte + content
     }
@@ -234,8 +241,8 @@ mod tests {
             line_index: 0,
             appended: " world".to_string(),
         };
-        let naive = naive_record_for_edit(&edit);
-        let predictive = predictive_record_for_edit(&edit, None);
+        let naive = naive_record_for_edit(&edit, Some("hello"));
+        let predictive = predictive_record_for_edit(&edit, Some("hello"));
         assert!(wire_bytes(&predictive) < wire_bytes(&naive));
     }
 

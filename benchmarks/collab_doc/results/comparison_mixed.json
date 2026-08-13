@@ -1,0 +1,16 @@
+{
+  "trace": "mixed",
+  "path": "/home/z/my-project/work/pulzz/benchmarks/collab_doc/corpus/trace_1000.jsonl",
+  "n_edits": 1000,
+  "naive_total_bytes": 81252,
+  "predictive_total_bytes": 72639,
+  "naive_avg_bytes_per_edit": 81.252,
+  "predictive_avg_bytes_per_edit": 72.639,
+  "reduction_pct": 10.60035445281347,
+  "edit_type_counts": {
+    "insert": 255,
+    "delete": 240,
+    "replace": 271,
+    "append": 234
+  }
+}

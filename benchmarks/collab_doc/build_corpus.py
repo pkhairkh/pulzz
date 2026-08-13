@@ -45,13 +45,13 @@ def make_edit(state, edit_type, rng):
         return make_insert(state, rng)
     elif edit_type == "delete":
         idx = rng.randrange(len(state))
-        return {"edit_type": "delete", "line_index": idx, "old_content": state[idx], "new_content": ""}
+        return {"edit_type": "delete", "line_index": idx}
     elif edit_type == "replace":
         idx = rng.randrange(len(state))
         old = state[idx]
         # Replacement: unrelated text
         new = f"Replacement line {rng.randrange(1000000)}"
-        return {"edit_type": "replace", "line_index": idx, "old_content": old, "new_content": new}
+        return {"edit_type": "replace", "line_index": idx, "old_content": old, "content": new}
     elif edit_type == "append":
         idx = rng.randrange(len(state))
         old = state[idx]
@@ -64,20 +64,20 @@ def make_insert(state, rng):
     """Make an insert edit."""
     content = f"New line {rng.randrange(1000000)} with some text content"
     idx = rng.randrange(len(state) + 1) if state else 0
-    return {"edit_type": "insert", "line_index": idx, "old_content": "", "new_content": content}
+    return {"edit_type": "insert", "line_index": idx, "content": content}
 
 def apply_edit(state, edit):
     """Apply an edit to the doc state (mutates state in place)."""
     et = edit["edit_type"]
     idx = edit["line_index"]
     if et == "insert":
-        state.insert(idx, edit["new_content"])
+        state.insert(idx, edit["content"])
     elif et == "delete":
         if idx < len(state):
             state.pop(idx)
     elif et == "replace":
         if idx < len(state):
-            state[idx] = edit["new_content"]
+            state[idx] = edit["content"]
     elif et == "append":
         if idx < len(state):
             state[idx] += edit["appended"]

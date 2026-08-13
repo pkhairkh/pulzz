@@ -1,0 +1,50 @@
+[
+  {
+    "trace": "mixed",
+    "path": "/home/z/my-project/work/pulzz/benchmarks/collab_doc/corpus/trace_1000.jsonl",
+    "n_edits": 1000,
+    "naive_total_bytes": 81252,
+    "predictive_total_bytes": 72639,
+    "naive_avg_bytes_per_edit": 81.252,
+    "predictive_avg_bytes_per_edit": 72.639,
+    "reduction_pct": 10.60035445281347,
+    "edit_type_counts": {
+      "insert": 255,
+      "delete": 240,
+      "replace": 271,
+      "append": 234
+    }
+  },
+  {
+    "trace": "high_locality",
+    "path": "/home/z/my-project/work/pulzz/benchmarks/collab_doc/corpus/trace_1000_high_locality.jsonl",
+    "n_edits": 1000,
+    "naive_total_bytes": 197519,
+    "predictive_total_bytes": 67850,
+    "naive_avg_bytes_per_edit": 197.519,
+    "predictive_avg_bytes_per_edit": 67.85,
+    "reduction_pct": 65.64887428551177,
+    "edit_type_counts": {
+      "insert": 37,
+      "delete": 36,
+      "replace": 53,
+      "append": 874
+    }
+  },
+  {
+    "trace": "low_locality",
+    "path": "/home/z/my-project/work/pulzz/benchmarks/collab_doc/corpus/trace_1000_low_locality.jsonl",
+    "n_edits": 1000,
+    "naive_total_bytes": 77412,
+    "predictive_total_bytes": 76060,
+    "naive_avg_bytes_per_edit": 77.412,
+    "predictive_avg_bytes_per_edit": 76.06,
+    "reduction_pct": 1.7464992507621557,
+    "edit_type_counts": {
+      "delete": 36,
+      "replace": 874,
+      "append": 53,
+      "insert": 37
+    }
+  }
+]
