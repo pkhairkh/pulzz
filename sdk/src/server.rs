@@ -117,16 +117,36 @@ impl PulzzServer {
         Ok(Some(PulzzSession::from_native(native, &self.config)))
     }
 
-    /// Emit a single `ServerEvent` as a protected Record, in-memory. Useful
-    /// for in-memory tests where no transport is connected.
+    /// Emit a single `ServerEvent` as a protected Record, in-memory.
+    ///
+    /// **In-memory only.** This method uses the `ServerSession`'s protector
+    /// (the one passed to `from_protector`). When the server is in network
+    /// mode (created via `bind` / `bind_with_config`), the in-memory
+    /// `ServerSession` holds a throwaway placeholder protector that is NOT
+    /// the same as the per-connection protector inside each accepted
+    /// `NativeServerSession`. Emitting records through the placeholder would
+    /// produce frames that cannot be decoded by the client (bug #3).
+    ///
+    /// In network mode, accept a session via `accept()` and call
+    /// `PulzzSession::send` / `send_batch` instead.
     pub fn emit_event(
         &mut self,
         event: server::ServerEvent,
     ) -> Result<shared_protocol::Record, SdkError> {
+        if self.acceptor.is_some() {
+            return Err(SdkError::invalid_state(
+                "PulzzServer::emit_event is in-memory-only; in network mode, \
+                 accept a session via accept() and call PulzzSession::send instead. \
+                 The in-memory ServerSession's protector is a throwaway placeholder \
+                 that does not match any accepted connection's protector (bug #3).",
+            ));
+        }
         self.session.emit_event(event).map_err(SdkError::from)
     }
 
     /// Emit a batch as a single BatchEnvelope Record.
+    ///
+    /// **In-memory only** — see `emit_event` for the rationale.
     pub fn emit_batch<I>(
         &mut self,
         items: I,
@@ -134,6 +154,12 @@ impl PulzzServer {
     where
         I: IntoIterator<Item = (shared_protocol::ItemId, shared_protocol::ExactStateMaterial)>,
     {
+        if self.acceptor.is_some() {
+            return Err(SdkError::invalid_state(
+                "PulzzServer::emit_batch is in-memory-only; in network mode, \
+                 accept a session via accept() and call PulzzSession::send_batch instead.",
+            ));
+        }
         self.session.emit_batch(items).map_err(SdkError::from)
     }
 
@@ -206,5 +232,13 @@ impl PulzzServer {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?.to_string();
         Ok((listener, addr))
+    }
+
+    /// Test helper: returns `true` if the server is in network mode
+    /// (i.e. created via `bind` / `bind_with_config` and has an acceptor).
+    /// Used by the `server_emit_event_network_mode` test to verify the
+    /// `emit_event` / `emit_batch` in-memory-only guard.
+    pub fn session_acceptor_is_some(&self) -> bool {
+        self.acceptor.is_some()
     }
 }
