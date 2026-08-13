@@ -1,0 +1,7 @@
+target/
+*.o
+*.so
+*.a
+*.dll
+*.dylib
+c_example

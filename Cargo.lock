@@ -1342,6 +1342,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulzz-ffi"
+version = "0.1.0"
+dependencies = [
+ "client",
+ "libc",
+ "pulzz-sdk",
+ "server",
+ "shared_protocol",
+ "tokio",
+]
+
+[[package]]
 name = "pulzz-sdk"
 version = "0.1.0"
 dependencies = [

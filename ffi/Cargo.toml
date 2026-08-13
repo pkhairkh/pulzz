@@ -1,0 +1,21 @@
+[package]
+name = "pulzz-ffi"
+version.workspace = true
+edition.workspace = true
+description = "C ABI for pulzZ — opaque handles, panic-safe extern \"C\" surface."
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+pulzz-sdk = { path = "../sdk" }
+shared_protocol = { path = "../shared_protocol" }
+client = { path = "../client" }
+server = { path = "../server" }
+tokio = { workspace = true }
+libc = "0.2"
+
+[lib]
+name = "pulzz"
+crate-type = ["cdylib", "staticlib", "rlib"]
+path = "src/lib.rs"
