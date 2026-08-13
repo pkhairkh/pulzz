@@ -14,7 +14,7 @@
 //! See `DESIGN.md` for the full design.
 
 // Benchmark crate — allow style lints that would be fixed in production code.
-#![allow(clippy::manual_strip)]
+#![allow(clippy::manual_strip, clippy::collapsible_if)]
 
 use shared_protocol::{ItemId, Record, RecordHeader, RecordType, RecordFlags, StreamId,
                      EpochId, SeqNo, CodecMode, PROTOCOL_VERSION, AUTH_TAG_LEN,
