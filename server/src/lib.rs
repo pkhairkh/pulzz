@@ -355,6 +355,21 @@ const PST_CONTEXT_WINDOW: usize = 16;
 /// is the standard threshold used in the literature (Begleiter 2004 §5).
 const PST_CONFIDENCE_THRESHOLD: u32 = 600_000;
 
+/// Wave 12 T-12-a: high-confidence threshold for the PST's prediction to
+/// SHORT-CIRCUIT the heuristic planner entirely. When the PST's confidence
+/// exceeds this value (0.9 = 900_000 / 1_000_000 in fixed-point), the
+/// planner skips `choose_route_by_family` and directly emits the predicted
+/// route family, subject to admissibility checks.
+///
+/// This implements the prediction-first routing paradigm from extend.md §0
+/// ("the sender asks: what internal assembly graph should the receiver
+/// already activate?"). The 0.9 threshold is conservative — the PST must
+/// be very confident before it overrides the heuristic planner.
+///
+/// Reference: Begleiter 2004 §5 — high-confidence predictions (≥ 0.9) have
+/// empirically < 5% error rate on stationary sequences.
+const PST_CONFIDENCE_HIGH_THRESHOLD: u32 = 900_000;
+
 impl Default for ServerState {
     fn default() -> Self {
         Self {
@@ -2756,6 +2771,72 @@ impl ServerState {
         if let Some(family) = pst_predicted_family {
             let key = format!("pst_predicted:{:?}", family);
             *self.fallback_metrics.fallback_reasons.entry(key).or_insert(0) += 1;
+        }
+
+        // Wave 12 T-12-b: PST authoritative short-circuit.
+        //
+        // When the PST's prediction confidence is VERY high (≥ 0.9, per
+        // PST_CONFIDENCE_HIGH_THRESHOLD) AND the predicted route family is
+        // DirectState (always admissible — it's the fallback that carries
+        // the compressed payload through P0-P5), AND there are no admissible
+        // predictive candidates (no assembly/episode/schema candidates that
+        // could provide better wire savings), skip the expensive
+        // `choose_route_by_family` heuristic planner and emit DirectState
+        // directly.
+        //
+        // Safety argument:
+        //   - DirectState is always admissible (no peer-state requirements).
+        //   - DirectState carries the compressed payload (compress_exact_bytes
+        //     is called on every ExactState emission regardless of route).
+        //   - The PST only reaches ≥ 0.9 confidence after observing many
+        //     emissions of the same family in the same context, so the
+        //     prediction is empirically grounded.
+        //   - The fallback to the heuristic planner when confidence < 0.9
+        //     OR when predictive candidates exist preserves all existing
+        //     behavior for cold-start / novel contexts / bundle-eligible routes.
+        //
+        // The "no predictive candidates" guard is critical: if the heuristic
+        // planner would have chosen Assembly/Schema/Episode (because the peer
+        // has the required substrate), the short-circuit must NOT engage —
+        // those routes provide better wire savings than DirectState.
+        //
+        // Reference: extend.md §0 ("prediction-first routing") and
+        // Begleiter 2004 §5 (high-confidence PST predictions are empirically
+        // reliable on stationary sequences).
+        let has_predictive_candidates = !assembly_candidates.is_empty()
+            || !episode_candidates.is_empty()
+            || !schema_candidates.is_empty();
+        let pst_high_confidence_direct_state = pst_prediction
+            .map(|pred| {
+                pred.confidence >= PST_CONFIDENCE_HIGH_THRESHOLD
+                    && pred.token == shared_protocol::chpmt::ControllerRouteFamily::DirectState as u8
+            })
+            .unwrap_or(false);
+
+        if pst_high_confidence_direct_state && !has_predictive_candidates {
+            // Short-circuit: emit DirectState with compression, skipping the
+            // heuristic planner. This is the prediction-first path.
+            *self
+                .fallback_metrics
+                .fallback_reasons
+                .entry("pst_short_circuit:DirectState".to_string())
+                .or_insert(0) += 1;
+            self.record_route_outcome(
+                ControllerRouteFamily::DirectState,
+                Some(source_kind),
+                context_hash,
+                ctx.seq_no.0,
+                true,
+            );
+            return self.emit_plain_exact_state_data(
+                ctx,
+                item_id,
+                block,
+                false,
+                false,
+                false,
+                FallbackReason::NotAFallback,
+            );
         }
 
         let chosen_route = choose_route_by_family(
