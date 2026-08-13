@@ -296,6 +296,7 @@ impl PulzzClient {
 
     /// Direct mutable access to the AEAD protector. Reaches into the
     /// transport when in network mode.
+    #[allow(dead_code)] // on wasm32, the send path is gated; this is used only on native
     pub(crate) fn protector_mut(&mut self) -> &mut StreamProtector {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(transport) = self.transport.as_mut() {
