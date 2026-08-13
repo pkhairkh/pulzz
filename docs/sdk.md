@@ -426,23 +426,56 @@ convention (PyPI SemVer, npm SemVer, Go module tags).
 
 ## 7. Open issues / future work
 
-1. **wasm-pack build requires clang.** The `bindings/wasm` crate compiles cleanly
-   for the host target (validating wasm-bindgen annotations), but the actual
-   `wasm32-unknown-unknown` build requires clang for `zstd-sys`. On systems
-   without clang, the WASM binding is incomplete.
+### 7.1 Known limitations (v0.5.0-sdk-hardened)
 
-2. **PqMutualV1 credential provisioning.** The SDK exposes PqMutualV1 as a
-   config enum value but does not yet provide a way to supply the
-   `IssuedClientCredential` and `ServerIdentityBundle` required by the
-   underlying `ClientSecurityConfig::PqMutual` variant. Callers must use the
-   lower-level `client::NativeClientAbiConfig` API until a future wave adds
-   credential-management helpers.
+1. **PqMutualV1 not wired through SDK connect.** `PulzzClient::connect_with_config`
+   returns `SdkError::InvalidArg` for `PqMutualV1` because the SDK does not yet
+   expose the `IssuedClientCredential` + `ServerIdentityBundle` inputs required
+   by the underlying `ClientSecurityConfig::PqMutual` variant. Callers must use
+   the lower-level `client::NativeClientAbiConfig` API until a future wave adds
+   credential-management helpers. (Bug #1, fixed in Wave 1)
 
-3. **Cross-language test suite.** The current cross-language coverage is via
-   the shared `shared_protocol` crate (all bindings inherit the same wire
-   format). A network round-trip test that exercises binding-to-binding
-   communication is documented but not yet automated.
+2. **ClassicRef1 not wired through SDK connect.** `PulzzClient::connect_with_config`
+   returns `SdkError::InvalidArg` for `ClassicRef1` because `ClientSecurityConfig`
+   has no ClassicRef1 variant. Use `PulzzClient::from_session` with
+   `classic_ref1_pair_from_rng` for in-memory classic-ref1 testing. (Bug #1)
+
+3. **`PulzzServer::emit_event`/`emit_batch` are in-memory only.** In network
+   mode (after `bind`/`bind_with_config`), these methods return
+   `SdkError::InvalidState` because the in-memory `ServerSession`'s protector
+   is a throwaway placeholder that doesn't match any accepted connection's
+   protector. Use `PulzzSession::send`/`send_batch` for network sessions.
+   (Bug #3, fixed in Wave 2)
+
+4. **`PulzzServer::emit_event` uses hardcoded seq_no=0.** Only the first
+   `emit_event` call per server instance succeeds; subsequent calls fail with
+   `UnexpectedSeqNo` because the protector's ratchet advances. This is a
+   pre-existing seq_no management limitation, not a security issue.
+
+5. **`PulzzWasmClient::connect` is not implemented for WASM.** Real
+   network-mode connect depends on native-only transport code (tokio +
+   quinn/rustls/aws-lc-sys) which cannot compile for
+   `wasm32-unknown-unknown`. The `connect()` method returns a clear error.
+   For browser/Node usage, construct a `PulzzClient` via `from_session` with
+   a `ClientSession` built from the lower-level `client` crate's wasm32
+   WebSocket backend. (Bug #5/#6, documented in Wave 1)
+
+### 7.2 Future work
+
+1. **WASM network connect.** Wire the `client` crate's wasm32 WebSocket /
+   WebTransport backend through `pulzz-sdk` so `PulzzWasmClient::connect`
+   works in browsers/Node. This requires adding a wasm32-target transport
+   abstraction to the SDK.
+
+2. **PqMutualV1 credential management.** Add `IssuedClientCredential` +
+   `ServerIdentityBundle` types to the SDK and wire them through
+   `connect_with_config` for PqMutualV1.
+
+3. **Network round-trip cross-language tests.** The current cross-language
+   tests verify wire-bytes compatibility (Python/Go/C parse the same bytes
+   Rust produces). A network round-trip test (Rust server ↔ Python/Go/C
+   client) would exercise the full handshake + transport path.
 
 4. **Mobile (Android/iOS).** The C ABI works on both platforms via the NDK,
-   but the JNI/Swift wrappers are out of scope for v0.4.0. Future waves may
+   but the JNI/Swift wrappers are out of scope for v0.5.0. Future waves may
    add AAR / SPM packages.

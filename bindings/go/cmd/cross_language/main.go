@@ -23,110 +23,110 @@ package main
 import "C"
 
 import (
-	"encoding/hex"
-	"fmt"
-	"os"
-	"strings"
-	"unsafe"
+        "encoding/hex"
+        "fmt"
+        "os"
+        "strings"
+        "unsafe"
 )
 
 // Record 1: ExactState, stream_id=1, item_id=42, payload="cross-lang-test"
 const hex1 = "020100000000000000000000000000000000000000" +
-	"110300002a000000000000000f000000" +
-	"63726f73732d6c616e672d74657374" +
-	"00000000000000000000000000000000"
+        "110300002a000000000000000f000000" +
+        "63726f73732d6c616e672d74657374" +
+        "00000000000000000000000000000000"
 
 // Record 2: ExactState, stream_id=7, item_id=99, payload="hello"
 const hex2 = "020700000000000000000000000100000000000000" +
-	"11030000630000000000000005000000" +
-	"68656c6c6f" +
-	"abababababababababababababababab"
+        "11030000630000000000000005000000" +
+        "68656c6c6f" +
+        "abababababababababababababababab"
 
 func parseRecord(hexStr string) (itemID uint64, payload []byte, recordType uint8, err error) {
-	raw, err := hex.DecodeString(hexStr)
-	if err != nil {
-		return 0, nil, 0, fmt.Errorf("hex decode: %w", err)
-	}
+        raw, err := hex.DecodeString(hexStr)
+        if err != nil {
+                return 0, nil, 0, fmt.Errorf("hex decode: %w", err)
+        }
 
-	var cItemID C.uint64_t
-	var cPayloadPtr *C.uint8_t
-	var cPayloadLen C.size_t
-	var cRecordType C.uint8_t
+        var cItemID C.uint64_t
+        var cPayloadPtr *C.uint8_t
+        var cPayloadLen C.size_t
+        var cRecordType C.uint8_t
 
-	result := C.pulzz_parse_record(
-		(*C.uint8_t)(&raw[0]),
-		C.size_t(len(raw)),
-		&cItemID,
-		&cPayloadPtr,
-		&cPayloadLen,
-		&cRecordType,
-	)
+        result := C.pulzz_parse_record(
+                (*C.uint8_t)(&raw[0]),
+                C.size_t(len(raw)),
+                &cItemID,
+                &cPayloadPtr,
+                &cPayloadLen,
+                &cRecordType,
+        )
 
-	if result != C.Ok {
-		return 0, nil, 0, fmt.Errorf("pulzz_parse_record returned %d", int(result))
-	}
+        if result != C.Ok {
+                return 0, nil, 0, fmt.Errorf("pulzz_parse_record returned %d", int(result))
+        }
 
-	payload = C.GoBytes(unsafe.Pointer(cPayloadPtr), C.int(cPayloadLen))
-	return uint64(cItemID), payload, uint8(cRecordType), nil
+        payload = C.GoBytes(unsafe.Pointer(cPayloadPtr), C.int(cPayloadLen))
+        return uint64(cItemID), payload, uint8(cRecordType), nil
 }
 
 func main() {
-	fmt.Println("Go <-> Rust cross-language wire-bytes test")
-	failures := 0
+        fmt.Println("Go <-> Rust cross-language wire-bytes test")
+        failures := 0
 
-	// Test record 1
-	id1, payload1, rt1, err := parseRecord(hex1)
-	if err != nil {
-		fmt.Printf("FAIL test_parse_record_1: %v\n", err)
-		failures++
-	} else if id1 != 42 {
-		fmt.Printf("FAIL test_parse_record_1: item_id=%d, want 42\n", id1)
-		failures++
-	} else if string(payload1) != "cross-lang-test" {
-		fmt.Printf("FAIL test_parse_record_1: payload=%q, want %q\n", string(payload1), "cross-lang-test")
-		failures++
-	} else if rt1 != 17 {
-		fmt.Printf("FAIL test_parse_record_1: record_type=%d, want 17\n", rt1)
-		failures++
-	} else {
-		fmt.Printf("PASS test_parse_record_1: item_id=%d, payload=%q, type=%d\n", id1, string(payload1), rt1)
-	}
+        // Test record 1
+        id1, payload1, rt1, err := parseRecord(hex1)
+        if err != nil {
+                fmt.Printf("FAIL test_parse_record_1: %v\n", err)
+                failures++
+        } else if id1 != 42 {
+                fmt.Printf("FAIL test_parse_record_1: item_id=%d, want 42\n", id1)
+                failures++
+        } else if string(payload1) != "cross-lang-test" {
+                fmt.Printf("FAIL test_parse_record_1: payload=%q, want %q\n", string(payload1), "cross-lang-test")
+                failures++
+        } else if rt1 != 17 {
+                fmt.Printf("FAIL test_parse_record_1: record_type=%d, want 17\n", rt1)
+                failures++
+        } else {
+                fmt.Printf("PASS test_parse_record_1: item_id=%d, payload=%q, type=%d\n", id1, string(payload1), rt1)
+        }
 
-	// Test record 2
-	id2, payload2, rt2, err := parseRecord(hex2)
-	if err != nil {
-		fmt.Printf("FAIL test_parse_record_2: %v\n", err)
-		failures++
-	} else if id2 != 99 {
-		fmt.Printf("FAIL test_parse_record_2: item_id=%d, want 99\n", id2)
-		failures++
-	} else if string(payload2) != "hello" {
-		fmt.Printf("FAIL test_parse_record_2: payload=%q, want %q\n", string(payload2), "hello")
-		failures++
-	} else if rt2 != 17 {
-		fmt.Printf("FAIL test_parse_record_2: record_type=%d, want 17\n", rt2)
-		failures++
-	} else {
-		fmt.Printf("PASS test_parse_record_2: item_id=%d, payload=%q, type=%d\n", id2, string(payload2), rt2)
-	}
+        // Test record 2
+        id2, payload2, rt2, err := parseRecord(hex2)
+        if err != nil {
+                fmt.Printf("FAIL test_parse_record_2: %v\n", err)
+                failures++
+        } else if id2 != 99 {
+                fmt.Printf("FAIL test_parse_record_2: item_id=%d, want 99\n", id2)
+                failures++
+        } else if string(payload2) != "hello" {
+                fmt.Printf("FAIL test_parse_record_2: payload=%q, want %q\n", string(payload2), "hello")
+                failures++
+        } else if rt2 != 17 {
+                fmt.Printf("FAIL test_parse_record_2: record_type=%d, want 17\n", rt2)
+                failures++
+        } else {
+                fmt.Printf("PASS test_parse_record_2: item_id=%d, payload=%q, type=%d\n", id2, string(payload2), rt2)
+        }
 
-	// Test version
-	version := uint32(C.pulzz_abi_version())
-	vstr := C.GoString(C.pulzz_version_string())
-	if version != 0x00000400 {
-		fmt.Printf("FAIL test_version: abi=0x%08x, want 0x00000400\n", version)
-		failures++
-	} else if !strings.Contains(vstr, "pulzZ") {
-		fmt.Printf("FAIL test_version: str=%q doesn't contain 'pulzZ'\n", vstr)
-		failures++
-	} else {
-		fmt.Printf("PASS test_version: abi=0x%08x, str=%q\n", version, vstr)
-	}
+        // Test version
+        version := uint32(C.pulzz_abi_version())
+        vstr := C.GoString(C.pulzz_version_string())
+        if version != 0x00000500 {
+                fmt.Printf("FAIL test_version: abi=0x%08x, want 0x00000500\n", version)
+                failures++
+        } else if !strings.Contains(vstr, "pulzZ") {
+                fmt.Printf("FAIL test_version: str=%q doesn't contain 'pulzZ'\n", vstr)
+                failures++
+        } else {
+                fmt.Printf("PASS test_version: abi=0x%08x, str=%q\n", version, vstr)
+        }
 
-	if failures == 0 {
-		fmt.Println("\nAll Go cross-language tests PASSED")
-		os.Exit(0)
-	}
-	fmt.Printf("\n%d Go cross-language tests FAILED\n", failures)
-	os.Exit(1)
+        if failures == 0 {
+                fmt.Println("\nAll Go cross-language tests PASSED")
+                os.Exit(0)
+        }
+        fmt.Printf("\n%d Go cross-language tests FAILED\n", failures)
+        os.Exit(1)
 }

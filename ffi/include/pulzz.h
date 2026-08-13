@@ -16,7 +16,7 @@
 /**
  * Major.minor.patch packed as `major<<16 | minor<<8 | patch`.
  */
-#define ABI_VERSION (((0 << 16) | (4 << 8)) | 0)
+#define ABI_VERSION (((0 << 16) | (5 << 8)) | 0)
 
 enum PulzzResult
 #if __STDC_VERSION__ >= 202311L

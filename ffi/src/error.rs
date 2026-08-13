@@ -37,7 +37,7 @@ pub fn last_error_ptr() -> *const c_char {
 // to the caller is valid until the next pulzz_parse_record call on the same
 // thread. This avoids requiring the caller to free the buffer.
 thread_local! {
-    static PAYLOAD_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    static PAYLOAD_BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Store a payload buffer in thread-local storage and return a pointer to

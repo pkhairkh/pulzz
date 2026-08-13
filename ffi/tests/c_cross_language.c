@@ -110,9 +110,9 @@ static int test_parse_record(const char *hex, uint64_t want_id,
 
 static int test_version_and_constants(void) {
     uint32_t version = pulzz_abi_version();
-    /* (0 << 16) | (4 << 8) | 0 = 0x00000400 */
-    if (version != 0x00000400) {
-        printf("FAIL test_version: abi_version=0x%08x, want 0x00000400\n", version);
+    /* (0 << 16) | (5 << 8) | 0 = 0x00000500 */
+    if (version != 0x00000500) {
+        printf("FAIL test_version: abi_version=0x%08x, want 0x00000500\n", version);
         return 1;
     }
     const char *vstr = pulzz_version_string();
