@@ -14,12 +14,13 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use shared_protocol::{
-    ItemId, Record, RecordHeader, RecordType, StreamId, TransportConfig,
-    classic_ref1_pair_from_rng,
+    ItemId, Record, RecordHeader, RecordType, StreamId,
     protection::StreamProtector,
-    transport::encode_compact_transport_records,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use shared_protocol::{classic_ref1_pair_from_rng, transport::encode_compact_transport_records};
 use rand::SeedableRng;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::time::timeout;
 
 use crate::{
@@ -37,6 +38,9 @@ use crate::{
 pub struct PulzzClient {
     pub(crate) inner: client::ClientSession,
     pub(crate) config: ClientConfig,
+    /// Native-only transport handle. On `wasm32` the field does not exist;
+    /// the client operates purely in in-memory mode (server-push pattern).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) transport: Option<client::NativeClientSession>,
     pub(crate) pending_recv: VecDeque<Record>,
 }
@@ -54,6 +58,7 @@ impl PulzzClient {
         Self {
             inner: session,
             config,
+            #[cfg(not(target_arch = "wasm32"))]
             transport: None,
             pending_recv: VecDeque::new(),
         }
@@ -108,10 +113,17 @@ impl PulzzClient {
             .protector_mut()
             .protect_record(plain)
             .map_err(SdkError::Protection)?;
-        if let Some(transport) = self.transport.as_mut() {
-            let frame = encode_compact_transport_records(&[protected]);
-            transport.send_transport_frame(frame).await?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(transport) = self.transport.as_mut() {
+                let frame = encode_compact_transport_records(&[protected]);
+                transport.send_transport_frame(frame).await?;
+            }
         }
+        // On wasm32 `protected` is intentionally unused — the in-memory
+        // server-push pattern doesn't use client send. Silence the warning.
+        #[cfg(target_arch = "wasm32")]
+        let _ = protected;
         Ok(())
     }
 
@@ -168,10 +180,15 @@ impl PulzzClient {
             .protector_mut()
             .protect_record(plain)
             .map_err(SdkError::Protection)?;
-        if let Some(transport) = self.transport.as_mut() {
-            let frame = encode_compact_transport_records(&[protected]);
-            transport.send_transport_frame(frame).await?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(transport) = self.transport.as_mut() {
+                let frame = encode_compact_transport_records(&[protected]);
+                transport.send_transport_frame(frame).await?;
+            }
         }
+        #[cfg(target_arch = "wasm32")]
+        let _ = protected;
         Ok(())
     }
 
@@ -182,38 +199,42 @@ impl PulzzClient {
     ///
     /// Returns `Ok(None)` when the carrier signals end-of-stream.
     pub async fn recv(&mut self) -> Result<Option<Record>, SdkError> {
-        let timeout_ms = self.config.timeout_ms();
-        if let Some(transport) = self.transport.as_mut() {
-            let frame_fut = transport.read_transport_frame();
-            let frame = if timeout_ms > 0 {
-                timeout(Duration::from_millis(timeout_ms), frame_fut)
-                    .await
-                    .map_err(|_| SdkError::Timeout(timeout_ms))?
-                    .map_err(SdkError::from)?
-            } else {
-                frame_fut.await.map_err(SdkError::from)?
-            };
-            let Some(bytes) = frame else {
-                return Ok(None);
-            };
-            let records = self
-                .protector_mut()
-                .unprotect_transport_frame(&bytes)
-                .map_err(SdkError::Protection)?;
-            let mut iter = records.into_iter();
-            if let Some(first) = iter.next() {
-                self.inner
-                    .state_mut()
-                    .apply_record(first.clone())
-                    .map_err(SdkError::from)?;
-                for extra in iter {
-                    self.pending_recv.push_back(extra);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let timeout_ms = self.config.timeout_ms();
+            if let Some(transport) = self.transport.as_mut() {
+                let frame_fut = transport.read_transport_frame();
+                let frame = if timeout_ms > 0 {
+                    timeout(Duration::from_millis(timeout_ms), frame_fut)
+                        .await
+                        .map_err(|_| SdkError::Timeout(timeout_ms))?
+                        .map_err(SdkError::from)?
+                } else {
+                    frame_fut.await.map_err(SdkError::from)?
+                };
+                let Some(bytes) = frame else {
+                    return Ok(None);
+                };
+                let records = self
+                    .protector_mut()
+                    .unprotect_transport_frame(&bytes)
+                    .map_err(SdkError::Protection)?;
+                let mut iter = records.into_iter();
+                if let Some(first) = iter.next() {
+                    self.inner
+                        .state_mut()
+                        .apply_record(first.clone())
+                        .map_err(SdkError::from)?;
+                    for extra in iter {
+                        self.pending_recv.push_back(extra);
+                    }
+                    return Ok(Some(first));
                 }
-                return Ok(Some(first));
+                return Ok(None);
             }
-            return Ok(None);
         }
-        // In-memory mode
+        // In-memory mode (always taken on wasm32; also taken on native when
+        // no transport is connected).
         if let Some(record) = self.pending_recv.pop_front() {
             self.inner
                 .apply_protected_record(record.clone())
@@ -227,9 +248,15 @@ impl PulzzClient {
     /// Close the underlying transport (network mode). In in-memory mode
     /// this is a no-op.
     pub async fn close(self) -> Result<(), SdkError> {
-        if let Some(transport) = self.transport {
-            transport.close().await.map_err(SdkError::from)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(transport) = self.transport {
+                transport.close().await.map_err(SdkError::from)?;
+            }
         }
+        // On wasm32 there is no transport field; close is a no-op.
+        #[cfg(target_arch = "wasm32")]
+        let _ = self;
         Ok(())
     }
 
@@ -244,21 +271,21 @@ impl PulzzClient {
     /// Mutable access to the inner client session / protector. In network
     /// mode this reaches into the transport's session.
     pub fn session_mut(&mut self) -> &mut client::ClientSession {
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(transport) = self.transport.as_mut() {
-            transport.session_mut()
-        } else {
-            &mut self.inner
+            return transport.session_mut();
         }
+        &mut self.inner
     }
 
     /// Direct mutable access to the AEAD protector. Reaches into the
     /// transport when in network mode.
     pub(crate) fn protector_mut(&mut self) -> &mut StreamProtector {
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(transport) = self.transport.as_mut() {
-            transport.session_mut().protector_mut()
-        } else {
-            self.inner.protector_mut()
+            return transport.session_mut().protector_mut();
         }
+        self.inner.protector_mut()
     }
 
     /// Read-only access to the underlying client config.
@@ -330,12 +357,14 @@ impl PulzzClientBuilder {
     ///
     /// The carrier configured on the builder overrides the URL scheme if
     /// they conflict.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn connect(self, url: &str) -> Result<PulzzClient, SdkError> {
         let config = self.build_config();
         PulzzClient::connect_with_config(url, config).await
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl PulzzClient {
     /// Connect to a server using the default config + the given URL.
     pub async fn connect(url: &str) -> Result<Self, SdkError> {
@@ -344,10 +373,44 @@ impl PulzzClient {
 
     /// Connect with a fully-specified `ClientConfig`. Builds a
     /// `client::ClientConnectConfig` and calls `connect_native_session`.
+    ///
+    /// **Security profile handling:**
+    /// - `PqSimpleV1` — proceeds with the PqSimple handshake (the only
+    ///   profile currently wired through the SDK's `connect_with_config`).
+    /// - `PqMutualV1` — returns `InvalidArg`. The SDK does not yet expose
+    ///   the `IssuedClientCredential` + `ServerIdentityBundle` inputs needed
+    ///   to drive a mutual-PQ handshake.
+    /// - `ClassicRef1` — returns `InvalidArg`. `ClientSecurityConfig` has
+    ///   no ClassicRef1 variant; use `PulzzClient::from_session` with
+    ///   `classic_ref1_pair_from_rng` for in-memory classic-ref1 testing.
     pub async fn connect_with_config(
         url: &str,
         config: ClientConfig,
     ) -> Result<Self, SdkError> {
+        // Honor the caller's SecurityProfile choice. Only PqSimpleV1 is
+        // wired through the SDK's network connect path today. The other
+        // profiles require credentials or APIs not yet exposed — fail
+        // fast with a clear InvalidArg error instead of silently mapping
+        // them to PqSimple (which was the previous buggy behavior, bug #1).
+        match config.security {
+            SecurityProfile::PqSimpleV1 => {}
+            SecurityProfile::PqMutualV1 => {
+                return Err(SdkError::invalid_arg(
+                    "PqMutualV1 is not yet wired through PulzzClient::connect_with_config; \
+                     it requires IssuedClientCredential + ServerIdentityBundle inputs \
+                     that the SDK does not yet expose. Use PqSimpleV1 for network connect, \
+                     or PulzzClient::from_session for in-memory testing.",
+                ));
+            }
+            SecurityProfile::ClassicRef1 => {
+                return Err(SdkError::invalid_arg(
+                    "ClassicRef1 is not wired through PulzzClient::connect_with_config; \
+                     ClientSecurityConfig has no ClassicRef1 variant. Use \
+                     PulzzClient::from_session with classic_ref1_pair_from_rng \
+                     for in-memory classic-ref1 testing.",
+                ));
+            }
+        }
         let carrier_kind = match config.carrier {
             CarrierKind::WebSocket => client::NativeClientCarrierKind::WebSocket,
             CarrierKind::Tcp => client::NativeClientCarrierKind::Tcp,
@@ -377,9 +440,14 @@ impl PulzzClient {
             .map_err(SdkError::from)?;
         // Construct a placeholder inner session (used only when transport is None).
         // The real session for network mode lives inside `native`.
+        //
+        // Bug #2 fix: the placeholder protector's stream_id MUST match the
+        // network session's stream_id (StreamId(1)). Previously this used
+        // StreamId(0), which caused protect_record to reject the header at
+        // runtime with UnexpectedStreamId.
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x00C1_DE0F_FACE);
         let (placeholder_protector, _) = classic_ref1_pair_from_rng(
-            StreamId(0),
+            stream_id, // StreamId(1) — matches the network session
             shared_protocol::StreamDirection::ClientToServer,
             &mut rng,
         );
@@ -395,16 +463,11 @@ impl PulzzClient {
 
 // Re-exported helper for tests so they can construct a classic_ref1 protector
 // pair without depending on `shared_protocol` directly.
+#[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub fn classic_pair_for_test(
     stream_id: StreamId,
 ) -> (StreamProtector, StreamProtector) {
     let mut rng = rand::rngs::StdRng::seed_from_u64(0x5EED_5EED);
     classic_ref1_pair_from_rng(stream_id, shared_protocol::StreamDirection::ServerToClient, &mut rng)
-}
-
-// Keep TransportConfig imported for type inference in future extensions.
-#[allow(dead_code)]
-fn _transport_config_default() -> TransportConfig {
-    TransportConfig::default()
 }
