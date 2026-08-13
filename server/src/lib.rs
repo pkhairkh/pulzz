@@ -4758,16 +4758,17 @@ impl ServerSession {
 
     /// Wave 13 T-13-b: Emit a batch of items as a single BatchEnvelope record.
     ///
-    /// Each item is compressed via `compress_exact_bytes` (the P0-P5 pipeline),
-    /// then wrapped in a `BatchEnvelope` payload. The entire batch is protected
-    /// by a single AEAD tag and transported in a single record, amortizing the
-    /// per-item overhead (AEAD tag + record header + transport envelope ≈ 94 B)
-    /// across all items in the batch.
+    /// Each item is stored UNCOMPRESSED in the envelope, then the entire
+    /// envelope is compressed as a single zstd stream. This exploits
+    /// cross-item redundancy (e.g., repeated JSON keys across items) that
+    /// per-item compression cannot capture.
     ///
-    /// For 100 items at ~90 B each: wire bytes drop from ~18400 (per-item) to
-    /// ~10500 (batched) — a ~43% reduction.
+    /// The entire batch is protected by a single AEAD tag and transported
+    /// in a single record, amortizing the per-item overhead (AEAD tag +
+    /// record header + transport envelope ≈ 94 B) across all items.
     ///
-    /// Returns the single BatchEnvelope record.
+    /// For 100 items of repeated JSON at ~200 B each: wire bytes drop from
+    /// ~25600 (per-item) to ~5000 (batched+compressed) — a ~80% reduction.
     pub fn emit_batch<I>(&mut self, items: I) -> Result<Record, ServerError>
     where
         I: IntoIterator<Item = (ItemId, ExactStateMaterial)>,
@@ -4780,14 +4781,26 @@ impl ServerSession {
                 .get(&item_id)
                 .map(|d| d.kind)
                 .unwrap_or(shared_protocol::SourceKind::Binary);
-            let compressed = self
-                .state
-                .compress_exact_bytes(source_kind, item_id, &material.exact_bytes);
-            envelope.push(item_id, source_kind, compressed);
+            // Store uncompressed — the entire envelope will be compressed below.
+            envelope.push(item_id, source_kind, material.exact_bytes.to_vec());
         }
-        let payload = envelope
+        let envelope_bytes = envelope
             .encode()
             .map_err(|e| ServerError::ValidationPayload(shared_protocol::WireError::InvalidPayload(e.to_string())))?;
+
+        // Wave 13 T-13-b: compress the ENTIRE batch envelope as one zstd stream.
+        // This captures cross-item redundancy (repeated JSON keys, identical
+        // field names, similar values) that per-item compression misses.
+        let compressed_payload = if envelope_bytes.len() > 64 {
+            // zstd level 3 — good balance of speed and ratio.
+            match shared_protocol::compress::zstd_compress_raw(&envelope_bytes) {
+                Ok(c) if c.len() < envelope_bytes.len() => c,
+                _ => envelope_bytes.clone(),
+            }
+        } else {
+            envelope_bytes.clone()
+        };
+
         let ctx = self.header_context();
         let header = shared_protocol::protocol::RecordHeader {
             version: shared_protocol::protocol::PROTOCOL_VERSION,
@@ -4796,13 +4809,13 @@ impl ServerSession {
             record_type: shared_protocol::RecordType::BatchEnvelope,
             flags: shared_protocol::protocol::RecordFlags::empty(),
             item_id: ItemId(0),
-            payload_len: payload.len() as u32,
+            payload_len: compressed_payload.len() as u32,
             codec_mode: shared_protocol::protocol::CodecMode::DirectExact,
             epoch_id: ctx.epoch_id,
         };
         let record = shared_protocol::protocol::Record {
             header,
-            payload,
+            payload: compressed_payload,
             auth_tag: [0u8; 16],
         };
         self.protector

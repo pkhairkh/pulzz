@@ -416,41 +416,32 @@ impl ClientState {
     /// Wave 13 T-13-c: Apply a BatchEnvelope record by decoding the envelope,
     /// then decompressing and caching each item.
     ///
-    /// Each item in the batch carries its own item_id, source_kind, and
-    /// compressed payload. The decompression path is the same as the
-    /// single-item path (calls `decode_compressed_payload` with the client's
-    /// dict_manager / template_registry / previous_versions).
+    /// Wave 13 T-13-b update: the entire batch payload is now zstd-compressed
+    /// as a single stream (not per-item). This method decompresses the batch
+    /// payload first, then decodes the envelope, then caches each item.
     fn apply_batch_envelope(
         &mut self,
         header: RecordHeader,
         payload: Vec<u8>,
     ) -> Result<(), ClientApplyError> {
-        let envelope = shared_protocol::batch::BatchEnvelope::decode(&payload)
+        // Wave 13 T-13-b: decompress the entire batch payload first.
+        // The server compresses the postcard-encoded BatchEnvelope as a
+        // single zstd stream. We decompress it here, then decode the envelope.
+        let envelope_bytes = if payload.len() > 64 {
+            match shared_protocol::compress::zstd_decompress_raw(&payload, 2 * 1024 * 1024) {
+                Ok(decompressed) => decompressed,
+                Err(_) => payload, // fallback: treat as uncompressed
+            }
+        } else {
+            payload
+        };
+
+        let envelope = shared_protocol::batch::BatchEnvelope::decode(&envelope_bytes)
             .map_err(|e| ClientApplyError::PredictiveDispatch(e.to_string()))?;
         for item in envelope.items {
-            // Decompress each item's payload using the existing P0-P5 path.
-            let decompressed = if shared_protocol::starts_with_compression_tag(&item.payload) {
-                let result = shared_protocol::decode_compressed_payload(
-                    &item.payload,
-                    &self.dict_manager,
-                    &self.template_registry,
-                    &self.previous_versions,
-                    item.source_kind,
-                );
-                match &result {
-                    Ok(d) => d.clone(),
-                    Err(_) => {
-                        // Fallback: strip the 2-byte compression prefix.
-                        if item.payload.len() > 2 {
-                            item.payload[2..].to_vec()
-                        } else {
-                            item.payload.clone()
-                        }
-                    }
-                }
-            } else {
-                item.payload.clone()
-            };
+            // Each item's payload is already uncompressed (the server stored
+            // uncompressed items and compressed the whole envelope).
+            let decompressed = item.payload;
             // Feed the decompressed sample to the dict_manager for future training.
             self.dict_manager.add_sample(item.source_kind, &decompressed);
             if item.source_kind == shared_protocol::SourceKind::Json {
@@ -481,8 +472,6 @@ impl ClientState {
             );
             let entry = ClientEntry { object };
             self.cache.insert(item.item_id, entry);
-            self.previous_versions
-                .insert(item.item_id.0, item.payload.clone());
         }
         let _ = header; // header validated by caller
         Ok(())
