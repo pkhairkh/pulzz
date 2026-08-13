@@ -33,12 +33,12 @@ try {
 }
 
 try {
-  await client.sendBatch([
+  await client.send_batch([
     { itemId: 1n, payload: new Uint8Array([1]) },
     { itemId: 2n, payload: new Uint8Array([2]) },
   ]);
 } catch (e) {
-  console.log('  sendBatch (before connect) failed as expected:', e?.message ?? e);
+  console.log('  send_batch (before connect) failed as expected:', e?.message ?? e);
 }
 
 await client.close();

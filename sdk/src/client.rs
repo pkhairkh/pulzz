@@ -14,11 +14,12 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use shared_protocol::{
-    ItemId, Record, RecordHeader, RecordType, StreamId,
+    ItemId, Record, RecordHeader, RecordType,
     protection::StreamProtector,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use shared_protocol::{classic_ref1_pair_from_rng, transport::encode_compact_transport_records};
+use shared_protocol::{StreamId, classic_ref1_pair_from_rng, transport::encode_compact_transport_records};
+#[cfg(not(target_arch = "wasm32"))]
 use rand::SeedableRng;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::time::timeout;
