@@ -18,7 +18,7 @@ use shared_protocol::{
     protection::StreamProtector,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use shared_protocol::{StreamId, classic_ref1_pair_from_rng, transport::encode_compact_transport_records};
+use shared_protocol::{StreamId, classic_ref1_pair_from_rng};
 #[cfg(not(target_arch = "wasm32"))]
 use rand::SeedableRng;
 #[cfg(not(target_arch = "wasm32"))]
@@ -87,6 +87,13 @@ impl PulzzClient {
         // placeholder's stream id (which protect_record will overwrite via
         // the active transport's protector).
         let stream_id = self.inner.protector().stream_id();
+        // DirectExact codec mode requires the payload to start with a source
+        // kind tag byte (1=text, 2=json, 3=binary, 4=image) followed by the
+        // exact bytes. Prepend SourceKind::Binary so the receiver's
+        // decode_direct_exact_payload can parse it.
+        let mut encoded_payload = Vec::with_capacity(1 + payload.len());
+        encoded_payload.push(shared_protocol::SourceKind::Binary as u8);
+        encoded_payload.extend_from_slice(payload);
         Ok(Record {
             header: RecordHeader {
                 version: shared_protocol::PROTOCOL_VERSION,
@@ -97,9 +104,9 @@ impl PulzzClient {
                 codec_mode: shared_protocol::CodecMode::DirectExact,
                 flags: shared_protocol::RecordFlags::empty(),
                 item_id,
-                payload_len: payload.len() as u32,
+                payload_len: encoded_payload.len() as u32,
             },
-            payload: payload.to_vec(),
+            payload: encoded_payload,
             auth_tag: [0u8; shared_protocol::AUTH_TAG_LEN],
         })
     }
@@ -110,21 +117,25 @@ impl PulzzClient {
     /// not client-push).
     pub async fn send(&mut self, item_id: ItemId, payload: &[u8]) -> Result<(), SdkError> {
         let plain = self.build_exact_record(item_id, payload)?;
-        let protected = self
-            .protector_mut()
-            .protect_record(plain)
-            .map_err(SdkError::Protection)?;
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(transport) = self.transport.as_mut() {
-                let frame = encode_compact_transport_records(&[protected]);
+                // Use protect_transport_records (not protect_record + encode)
+                // to produce the outer AEAD transport frame that the peer's
+                // unprotect_transport_frame expects. Matches PulzzSession::send.
+                let frame = {
+                    let protector = transport.session_mut().protector_mut();
+                    protector
+                        .protect_transport_records(std::iter::once(plain))
+                        .map_err(SdkError::Protection)?
+                };
                 transport.send_transport_frame(frame).await?;
+                return Ok(());
             }
         }
-        // On wasm32 `protected` is intentionally unused — the in-memory
-        // server-push pattern doesn't use client send. Silence the warning.
+        // On wasm32 or in-memory mode: no-op (server-push pattern).
         #[cfg(target_arch = "wasm32")]
-        let _ = protected;
+        let _ = plain;
         Ok(())
     }
 
@@ -177,19 +188,23 @@ impl PulzzClient {
             payload,
             auth_tag: [0u8; shared_protocol::AUTH_TAG_LEN],
         };
-        let protected = self
-            .protector_mut()
-            .protect_record(plain)
-            .map_err(SdkError::Protection)?;
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(transport) = self.transport.as_mut() {
-                let frame = encode_compact_transport_records(&[protected]);
+                // Use protect_transport_records to produce the outer AEAD
+                // transport frame (matches PulzzSession::send + client recv).
+                let frame = {
+                    let protector = transport.session_mut().protector_mut();
+                    protector
+                        .protect_transport_records(std::iter::once(plain))
+                        .map_err(SdkError::Protection)?
+                };
                 transport.send_transport_frame(frame).await?;
+                return Ok(());
             }
         }
         #[cfg(target_arch = "wasm32")]
-        let _ = protected;
+        let _ = plain;
         Ok(())
     }
 

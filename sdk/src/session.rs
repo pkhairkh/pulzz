@@ -34,11 +34,19 @@ impl PulzzSession {
     }
 
     /// Send a single item over the accepted session. The record is
-    /// protected by the session's AEAD protector before being shipped.
+    /// protected by the session's AEAD protector as a transport frame
+    /// (outer AEAD layer) before being shipped.
     pub async fn send(&mut self, item_id: ItemId, payload: &[u8]) -> Result<(), SdkError> {
         // stream_id is owned by the protector; the header value here is
-        // overwritten by protect_record before AEAD AAD computation.
+        // overwritten by protect_transport_records before AEAD AAD computation.
         let stream_id = StreamId(1);
+        // DirectExact codec mode requires the payload to start with a source
+        // kind tag byte (1=text, 2=json, 3=binary, 4=image) followed by the
+        // exact bytes. Prepend SourceKind::Binary so the receiver's
+        // decode_direct_exact_payload can parse it.
+        let mut encoded_payload = Vec::with_capacity(1 + payload.len());
+        encoded_payload.push(shared_protocol::SourceKind::Binary as u8);
+        encoded_payload.extend_from_slice(payload);
         let plain = Record {
             header: shared_protocol::RecordHeader {
                 version: shared_protocol::PROTOCOL_VERSION,
@@ -49,18 +57,19 @@ impl PulzzSession {
                 codec_mode: shared_protocol::CodecMode::DirectExact,
                 flags: shared_protocol::RecordFlags::empty(),
                 item_id,
-                payload_len: payload.len() as u32,
+                payload_len: encoded_payload.len() as u32,
             },
-            payload: payload.to_vec(),
+            payload: encoded_payload,
             auth_tag: [0u8; shared_protocol::AUTH_TAG_LEN],
         };
-        let protected = self
+        // Use protect_transport_records (not protect_record + encode) to
+        // produce the outer AEAD transport frame that the peer's
+        // unprotect_transport_frame expects.
+        let frame = self
             .inner
             .protector_mut()
-            .protect_record(plain)
+            .protect_transport_records(std::iter::once(plain))
             .map_err(SdkError::Protection)?;
-        let frame =
-            shared_protocol::transport::encode_compact_transport_records(&[protected]);
         self.inner.send_transport_frame(frame).await?;
         Ok(())
     }
