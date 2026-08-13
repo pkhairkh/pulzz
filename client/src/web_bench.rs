@@ -249,6 +249,7 @@ async fn run_web_bench_receiver(
                             codec_modes: progress.codec_modes,
                             source_kinds: progress.source_kinds,
                             residual_modes: progress.residual_modes,
+                            byte_categories: None,
                             apply_latency: apply_latency.summary(),
                         });
                     }
@@ -275,6 +276,7 @@ async fn run_web_bench_receiver(
         codec_modes: progress.codec_modes,
         source_kinds: progress.source_kinds,
         residual_modes: progress.residual_modes,
+        byte_categories: None,
         apply_latency: apply_latency.summary(),
     })
 }
@@ -427,6 +429,7 @@ async fn run_web_bench_sender(
         codec_modes: progress.codec_modes,
         source_kinds: progress.source_kinds,
         residual_modes: progress.residual_modes,
+        byte_categories: None,
         apply_latency: None,
     })
 }
@@ -643,6 +646,7 @@ fn publish_progress(progress: &WebBenchProgress, start_ms: f64) -> Result<(), Js
             elapsed_ms: (now_ms() - start_ms).round() as u64,
             records: progress.records,
             cue_object_records: progress.cue_object_records,
+            predictive_records: progress.predictive_records,
             original_payload_bytes: progress.original_payload_bytes,
             payload_bytes: progress.payload_bytes,
             wire_bytes: progress.wire_bytes,
@@ -767,10 +771,10 @@ fn classify_source_kind(totals: &mut WebBenchSourceKindTotals, record: &Record) 
         return;
     };
     match SourceKind::from_tag(tag) {
-        Some(SourceKind::Text) => totals.text += 1,
-        Some(SourceKind::Json) => totals.json += 1,
-        Some(SourceKind::Binary) => totals.binary += 1,
-        None => totals.unknown += 1,
+        Ok(SourceKind::Text) => totals.text += 1,
+        Ok(SourceKind::Json) => totals.json += 1,
+        Ok(SourceKind::Binary) => totals.binary += 1,
+        Ok(SourceKind::Image) | Err(_) => totals.unknown += 1,
     }
 }
 
@@ -857,7 +861,8 @@ fn benchmark_payload_len(record: &Record) -> u64 {
         | RecordType::ReplayHint
         | RecordType::SourceMeta
         | RecordType::Repair
-        | RecordType::MemoryRetire => record.payload.len() as u64,
+        | RecordType::MemoryRetire
+        | RecordType::BatchEnvelope => record.payload.len() as u64,
         // Control-plane records with no application payload
         RecordType::Rekey
         | RecordType::Close

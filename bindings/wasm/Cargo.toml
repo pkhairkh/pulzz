@@ -14,9 +14,20 @@ repository.workspace = true
 pulzz-sdk = { path = "../../sdk" }
 shared_protocol = { path = "../../shared_protocol" }
 wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.2"
+wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "BinaryType", "ErrorEvent", "CloseEvent"] }
+web-sys = { version = "0.3", features = [
+  "WebSocket", "MessageEvent", "BinaryType", "ErrorEvent", "CloseEvent",
+  # WebTransport features required by transitive dep `webtrans-wasm` (pulled
+  # in via pulzz-sdk → client → webtrans-wasm on wasm32). Without these the
+  # webtrans-wasm crate fails to compile with unresolved imports.
+  "WebTransport", "WebTransportError", "WebTransportErrorOptions",
+  "WebTransportErrorSource", "WebTransportBidirectionalStream",
+  "WebTransportSendStream", "WebTransportReceiveStream",
+  "WebTransportDatagramDuplexStream", "WebTransportOptions",
+  "WebTransportHash", "WebTransportCongestionControl", "WebTransportCloseInfo",
+  "ReadableStreamDefaultReader", "WritableStream", "WritableStreamDefaultWriter",
+] }
 
 [lib]
 name = "pulzz_wasm"

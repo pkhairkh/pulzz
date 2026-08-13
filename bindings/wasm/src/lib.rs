@@ -86,13 +86,29 @@ impl PulzzWasmClient {
         })
     }
 
-    pub async fn connect(&mut self, url: String) -> Result<(), JsValue> {
-        let cfg = self.config.clone();
-        let client = PulzzClient::connect_with_config(&url, cfg)
-            .await
-            .map_err(|e| js_err(format!("{e}")))?;
-        self.inner = Some(client);
-        Ok(())
+    /// Connect to a pulzZ server at `url`.
+    ///
+    /// **NOTE:** Real network-mode connect is not yet wired through the
+    /// `pulzz-sdk` crate on WASM. The SDK's `PulzzClient::connect_with_config`
+    /// depends on native-only transport code (tokio + quinn/rustls/aws-lc-sys)
+    /// which cannot compile for `wasm32-unknown-unknown`.
+    ///
+    /// To use the SDK in a browser/Node context today, construct a
+    /// `PulzzClient` via `PulzzClient::from_session` using a `ClientSession`
+    /// built from the lower-level `client` crate's wasm32 WebSocket /
+    /// WebTransport backend, then call `send` / `recv` / `close` on the
+    /// returned `PulzzWasmClient`.
+    ///
+    /// This method always returns an error so callers fail fast instead of
+    /// silently getting a broken connection.
+    pub async fn connect(&mut self, _url: String) -> Result<(), JsValue> {
+        Err(js_err(
+            "PulzzWasmClient::connect is not implemented for WASM; \
+             real network-mode connect is not yet wired through pulzz-sdk on \
+             wasm32. Use PulzzClient::from_session with a ClientSession built \
+             from the lower-level `client` crate's wasm32 WebSocket backend \
+             for in-browser / Node usage.",
+        ))
     }
 
     pub async fn send(&mut self, item_id: u64, payload: &[u8]) -> Result<(), JsValue> {
