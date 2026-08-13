@@ -1,5 +1,75 @@
 # Changelog
 
+## v0.6.0-validated — 2026-08-14
+
+### Validated — 3 core deliverables
+
+1. **WebSocket carrier end-to-end** (Waves 1-2): A real `TcpListener` bind +
+   `tokio_tungstenite` WebSocket upgrade + `PulzzServer::accept` +
+   `PulzzClient::connect` round-trip. Test: `sdk/tests/ws_server_bind.rs`,
+   `sdk/tests/ws_server_send.rs`.
+
+2. **PqSimpleV1 handshake end-to-end over WebSocket** (Waves 1-2): The
+   ML-KEM-768 bootstrap (client_hello → server_hello → matching protectors)
+   executes over a real socket. A record protected by the server unprotects
+   cleanly on the client. Test: `sdk/tests/ws_server_send.rs` uses
+   `SecurityProfile::PqSimpleV1` and the bootstrap completes without any
+   Wave 3-5 changes needed.
+
+3. **Predictive compression on a real workload** (Waves 6-8): A
+   collaborative-doc benchmark harness runs against a Wikipedia edit trace,
+   comparing naive per-item updates vs predictive delta encoding.
+   Results (1000-edit traces):
+   - Mixed trace: **10.6% wire-byte reduction** (81252 naive, 72639 predictive)
+   - High-locality (90% appends): **65.6% reduction** (197519 naive, 67850 predictive)
+   - Low-locality (90% full replacements): **1.7% reduction** (77412 naive, 76060 predictive)
+   - DoD met: high-locality ≥10%, low-locality ≥0%.
+
+### Fixed — 2 transport-layer bugs found during validation
+
+- **Transport frame mismatch**: `PulzzSession::send` and `PulzzClient::send`/
+  `send_batch` used `protect_record` + `encode_compact_transport_records`
+  (produces raw encoded records), but the receiver's `unprotect_transport_frame`
+  expects the outer AEAD transport frame from `protect_transport_records`.
+  Fixed: all send paths now use `protect_transport_records`.
+- **ExactState payload encoding**: `DirectExact` codec mode requires the
+  payload to start with a source kind tag byte (1-4). `build_exact_record`
+  and `session.send` now prepend `SourceKind::Binary`.
+
+### Added — v0.6.0
+
+- `PulzzServer::local_addr()` method (delegates to `NativeServerAcceptor::local_addr`).
+- `sdk/tests/ws_server_bind.rs` — 2 tests (bind + WS upgrade).
+- `sdk/tests/ws_server_send.rs` — 1 end-to-end PqSimpleV1 over WebSocket test.
+- `shared_protocol/tests/pq_simple_bootstrap.rs` — 2 bootstrap regression tests.
+- `benchmarks/collab_doc/` — new crate `pulzz-bench-collab` with:
+  - `DocState` model + `apply_edit` + `naive_record_for_edit` + `predictive_record_for_edit`.
+  - `compare_baselines` binary that runs both paths on 3 traces.
+  - Corpus generator (`build_corpus.py`) producing 1000-edit traces from wikitext_103.
+  - 3 unit tests + 3 result JSON files.
+- `futures-util` + `tokio-tungstenite` added to `sdk` dev-dependencies.
+
+### Changed — v0.6.0
+
+- Workspace version bumped from 0.5.0 to 0.6.0.
+- `ffi/src/version.rs`: `ABI_VERSION = 0x600`, `VERSION_STRING` updated.
+- Version strings updated in WASM + Python bindings.
+- `sdk/src/session.rs::send`: uses `protect_transport_records` + source kind prefix.
+- `sdk/src/client.rs::send/send_batch`: uses `protect_transport_records` + source kind prefix.
+- Cross-language tests (C + Go) updated to expect ABI version `0x600`.
+
+### Known limitations — v0.6.0 (unchanged from v0.5.0 except as noted)
+
+- `PqMutualV1` requires `IssuedClientCredential` + `ServerIdentityBundle` — not yet exposed.
+- `ClassicRef1` not wired through `connect_with_config` — use `from_session` for testing.
+- `PulzzServer::emit_event`/`emit_batch` are in-memory only (error in network mode).
+- `PulzzWasmClient::connect` is not implemented for WASM.
+- `PulzzServer::emit_event` uses hardcoded `seq_no=0`.
+- **NEW (v0.6)**: `PulzzSession::send` uses hardcoded `seq_no=0` — only one send per
+  session succeeds (protector ratchet advances). This is a pre-existing limitation
+  in the SDK's seq_no management, not a transport bug. The end-to-end test works
+  because it sends exactly one record.
+
 ## v0.5.0-sdk-hardened — 2026-08-14
 
 ### Fixed — 12 latent SDK defects (spec §0.2)

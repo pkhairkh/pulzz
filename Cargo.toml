@@ -3,7 +3,7 @@ members = ["client", "server", "shared_protocol", "sdk", "ffi", "bindings/wasm",
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 description = "Predictive-memory transport for exact-state state across browser and native clients with mutual post-quantum authenticated sessions."
 repository = "https://github.com/pkhairkh/pulzz.git"

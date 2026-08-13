@@ -113,8 +113,8 @@ func main() {
         // Test version
         version := uint32(C.pulzz_abi_version())
         vstr := C.GoString(C.pulzz_version_string())
-        if version != 0x00000500 {
-                fmt.Printf("FAIL test_version: abi=0x%08x, want 0x00000500\n", version)
+        if version != 0x00000600 {
+                fmt.Printf("FAIL test_version: abi=0x%08x, want 0x00000600\n", version)
                 failures++
         } else if !strings.Contains(vstr, "pulzZ") {
                 fmt.Printf("FAIL test_version: str=%q doesn't contain 'pulzZ'\n", vstr)

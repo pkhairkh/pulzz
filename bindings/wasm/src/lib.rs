@@ -183,7 +183,7 @@ impl PulzzWasmClient {
 
 #[wasm_bindgen]
 pub fn pulzz_version() -> String {
-    "pulzZ 0.5.0-sdk-hardened (WASM)".to_string()
+    "pulzZ 0.6.0-validated (WASM)".to_string()
 }
 
 #[allow(dead_code)]
