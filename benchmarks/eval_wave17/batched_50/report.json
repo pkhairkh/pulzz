@@ -1,0 +1,199 @@
+{
+  "config": {
+    "event_count_per_workload": 160,
+    "security_profile": "classic_ref1",
+    "preset": "default"
+  },
+  "workloads": [
+    {
+      "workload": "high_locality",
+      "seed": 8070450532247928832,
+      "event_count": 160,
+      "payload_event_count": 140,
+      "trace_path": "/home/z/my-project/work/bench_full/batched_50/batched/high_locality_trace.json",
+      "codec_modes": {
+        "direct_exact": 3,
+        "packed_exact": 0,
+        "predicted_exact": 0,
+        "control": 0
+      },
+      "source_kinds": {
+        "text": 47,
+        "json": 45,
+        "binary": 48
+      },
+      "bytes": {
+        "original_payload_bytes": 12855,
+        "encoded_payload_bytes": 7980,
+        "protected_wire_bytes": 8139,
+        "payload_savings_vs_original_pct": 37.92298716452742,
+        "wire_savings_vs_original_pct": 36.68611435239206,
+        "wire_overhead_vs_encoded_pct": 1.992481203007519,
+        "records_zstd_compressed": 0,
+        "records_not_compressed": 3,
+        "zstd_savings_bytes": 0,
+        "pre_zstd_payload_bytes": 12855,
+        "post_zstd_payload_bytes": 7980
+      },
+      "exactness": {
+        "checked_events": 10,
+        "exact_round_trips": 10,
+        "exact_round_trip_rate": 1.0
+      },
+      "latency": {
+        "encode_total_ns": 1258636,
+        "encode_avg_ns": 8990.257142857143,
+        "decode_total_ns": 425887,
+        "decode_avg_ns": 3042.05
+      },
+      "predictive_memory": {
+        "route_family_share": {},
+        "sync_risk_fallback_count": 0,
+        "exact_atom_direct_state_fallback_count": 0,
+        "transform_demoted_fallback_count": 0
+      },
+      "compress_pipeline": {
+        "zstd_dict_count": 0,
+        "zstd_raw_count": 0,
+        "delta_count": 0,
+        "template_count": 0,
+        "passthrough_count": 0,
+        "original_bytes": 0,
+        "compressed_bytes": 0,
+        "savings_pct": 0.0,
+        "dicts_trained": 0,
+        "templates_registered": 0,
+        "avg_compress_ns": 0.0,
+        "avg_decompress_ns": 0.0
+      }
+    },
+    {
+      "workload": "mixed_locality",
+      "seed": 8070450532770054401,
+      "event_count": 160,
+      "payload_event_count": 131,
+      "trace_path": "/home/z/my-project/work/bench_full/batched_50/batched/mixed_locality_trace.json",
+      "codec_modes": {
+        "direct_exact": 3,
+        "packed_exact": 0,
+        "predicted_exact": 0,
+        "control": 0
+      },
+      "source_kinds": {
+        "text": 41,
+        "json": 43,
+        "binary": 47
+      },
+      "bytes": {
+        "original_payload_bytes": 12311,
+        "encoded_payload_bytes": 7775,
+        "protected_wire_bytes": 7934,
+        "payload_savings_vs_original_pct": 36.84509787994477,
+        "wire_savings_vs_original_pct": 35.55356997806839,
+        "wire_overhead_vs_encoded_pct": 2.045016077170418,
+        "records_zstd_compressed": 0,
+        "records_not_compressed": 3,
+        "zstd_savings_bytes": 0,
+        "pre_zstd_payload_bytes": 12311,
+        "post_zstd_payload_bytes": 7775
+      },
+      "exactness": {
+        "checked_events": 26,
+        "exact_round_trips": 26,
+        "exact_round_trip_rate": 1.0
+      },
+      "latency": {
+        "encode_total_ns": 416114,
+        "encode_avg_ns": 3176.442748091603,
+        "decode_total_ns": 366588,
+        "decode_avg_ns": 2798.381679389313
+      },
+      "predictive_memory": {
+        "route_family_share": {},
+        "sync_risk_fallback_count": 0,
+        "exact_atom_direct_state_fallback_count": 0,
+        "transform_demoted_fallback_count": 0
+      },
+      "compress_pipeline": {
+        "zstd_dict_count": 0,
+        "zstd_raw_count": 0,
+        "delta_count": 0,
+        "template_count": 0,
+        "passthrough_count": 0,
+        "original_bytes": 0,
+        "compressed_bytes": 0,
+        "savings_pct": 0.0,
+        "dicts_trained": 0,
+        "templates_registered": 0,
+        "avg_compress_ns": 0.0,
+        "avg_decompress_ns": 0.0
+      }
+    },
+    {
+      "workload": "low_locality",
+      "seed": 8070450533292179970,
+      "event_count": 160,
+      "payload_event_count": 122,
+      "trace_path": "/home/z/my-project/work/bench_full/batched_50/batched/low_locality_trace.json",
+      "codec_modes": {
+        "direct_exact": 3,
+        "packed_exact": 0,
+        "predicted_exact": 0,
+        "control": 0
+      },
+      "source_kinds": {
+        "text": 40,
+        "json": 36,
+        "binary": 46
+      },
+      "bytes": {
+        "original_payload_bytes": 11478,
+        "encoded_payload_bytes": 7592,
+        "protected_wire_bytes": 7751,
+        "payload_savings_vs_original_pct": 33.856072486495904,
+        "wire_savings_vs_original_pct": 32.47081373061509,
+        "wire_overhead_vs_encoded_pct": 2.094309799789252,
+        "records_zstd_compressed": 0,
+        "records_not_compressed": 3,
+        "zstd_savings_bytes": 0,
+        "pre_zstd_payload_bytes": 11478,
+        "post_zstd_payload_bytes": 7592
+      },
+      "exactness": {
+        "checked_events": 54,
+        "exact_round_trips": 54,
+        "exact_round_trip_rate": 1.0
+      },
+      "latency": {
+        "encode_total_ns": 377066,
+        "encode_avg_ns": 3090.7049180327867,
+        "decode_total_ns": 313351,
+        "decode_avg_ns": 2568.4508196721313
+      },
+      "predictive_memory": {
+        "route_family_share": {},
+        "sync_risk_fallback_count": 0,
+        "exact_atom_direct_state_fallback_count": 0,
+        "transform_demoted_fallback_count": 0
+      },
+      "compress_pipeline": {
+        "zstd_dict_count": 0,
+        "zstd_raw_count": 0,
+        "delta_count": 0,
+        "template_count": 0,
+        "passthrough_count": 0,
+        "original_bytes": 0,
+        "compressed_bytes": 0,
+        "savings_pct": 0.0,
+        "dicts_trained": 0,
+        "templates_registered": 0,
+        "avg_compress_ns": 0.0,
+        "avg_decompress_ns": 0.0
+      }
+    }
+  ],
+  "divergences": [
+    "batched evaluation with batch_size=50 amortizes per-item overhead and exploits cross-item redundancy via whole-batch zstd compression",
+    "batched evaluation achieves POSITIVE wire savings on compressible workloads"
+  ]
+}

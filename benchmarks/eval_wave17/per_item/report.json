@@ -1,0 +1,208 @@
+{
+  "config": {
+    "event_count_per_workload": 160,
+    "security_profile": "classic_ref1",
+    "preset": "default"
+  },
+  "workloads": [
+    {
+      "workload": "high_locality",
+      "seed": 8070450532247928832,
+      "event_count": 160,
+      "payload_event_count": 140,
+      "trace_path": "/home/z/my-project/work/bench_full/per_item/high_locality_trace.json",
+      "codec_modes": {
+        "direct_exact": 97,
+        "packed_exact": 0,
+        "predicted_exact": 43,
+        "control": 20
+      },
+      "source_kinds": {
+        "text": 47,
+        "json": 45,
+        "binary": 48
+      },
+      "bytes": {
+        "original_payload_bytes": 12855,
+        "encoded_payload_bytes": 17928,
+        "protected_wire_bytes": 26408,
+        "payload_savings_vs_original_pct": -39.463243873978996,
+        "wire_savings_vs_original_pct": -105.42979385453131,
+        "wire_overhead_vs_encoded_pct": 47.30031236055332,
+        "records_zstd_compressed": 33,
+        "records_not_compressed": 127,
+        "zstd_savings_bytes": 788,
+        "pre_zstd_payload_bytes": 6499,
+        "post_zstd_payload_bytes": 5711
+      },
+      "exactness": {
+        "checked_events": 140,
+        "exact_round_trips": 140,
+        "exact_round_trip_rate": 1.0
+      },
+      "latency": {
+        "encode_total_ns": 23837190,
+        "encode_avg_ns": 148982.4375,
+        "decode_total_ns": 3228307,
+        "decode_avg_ns": 20176.91875
+      },
+      "predictive_memory": {
+        "route_family_share": {
+          "1": 0.354014598540146,
+          "3": 0.6459854014598541
+        },
+        "sync_risk_fallback_count": 0,
+        "exact_atom_direct_state_fallback_count": 0,
+        "transform_demoted_fallback_count": 0
+      },
+      "compress_pipeline": {
+        "zstd_dict_count": 10,
+        "zstd_raw_count": 0,
+        "delta_count": 108,
+        "template_count": 7,
+        "passthrough_count": 15,
+        "original_bytes": 12855,
+        "compressed_bytes": 12408,
+        "savings_pct": 3.477246207701279,
+        "dicts_trained": 2,
+        "templates_registered": 1,
+        "avg_compress_ns": 23913.914285714287,
+        "avg_decompress_ns": 1863.0642857142857
+      }
+    },
+    {
+      "workload": "mixed_locality",
+      "seed": 8070450532770054401,
+      "event_count": 160,
+      "payload_event_count": 131,
+      "trace_path": "/home/z/my-project/work/bench_full/per_item/mixed_locality_trace.json",
+      "codec_modes": {
+        "direct_exact": 106,
+        "packed_exact": 0,
+        "predicted_exact": 25,
+        "control": 29
+      },
+      "source_kinds": {
+        "text": 41,
+        "json": 43,
+        "binary": 47
+      },
+      "bytes": {
+        "original_payload_bytes": 12311,
+        "encoded_payload_bytes": 15231,
+        "protected_wire_bytes": 23711,
+        "payload_savings_vs_original_pct": -23.718625619364797,
+        "wire_savings_vs_original_pct": -92.6001137194379,
+        "wire_overhead_vs_encoded_pct": 55.67592410216007,
+        "records_zstd_compressed": 23,
+        "records_not_compressed": 137,
+        "zstd_savings_bytes": 490,
+        "pre_zstd_payload_bytes": 4580,
+        "post_zstd_payload_bytes": 4090
+      },
+      "exactness": {
+        "checked_events": 131,
+        "exact_round_trips": 131,
+        "exact_round_trip_rate": 1.0
+      },
+      "latency": {
+        "encode_total_ns": 15111433,
+        "encode_avg_ns": 94446.45625,
+        "decode_total_ns": 2363661,
+        "decode_avg_ns": 14772.88125
+      },
+      "predictive_memory": {
+        "route_family_share": {
+          "1": 0.45493562231759654,
+          "3": 0.5450643776824035
+        },
+        "sync_risk_fallback_count": 0,
+        "exact_atom_direct_state_fallback_count": 0,
+        "transform_demoted_fallback_count": 0
+      },
+      "compress_pipeline": {
+        "zstd_dict_count": 16,
+        "zstd_raw_count": 0,
+        "delta_count": 76,
+        "template_count": 17,
+        "passthrough_count": 22,
+        "original_bytes": 12311,
+        "compressed_bytes": 11297,
+        "savings_pct": 8.236536430834217,
+        "dicts_trained": 2,
+        "templates_registered": 1,
+        "avg_compress_ns": 15689.763358778626,
+        "avg_decompress_ns": 2324.1297709923665
+      }
+    },
+    {
+      "workload": "low_locality",
+      "seed": 8070450533292179970,
+      "event_count": 160,
+      "payload_event_count": 122,
+      "trace_path": "/home/z/my-project/work/bench_full/per_item/low_locality_trace.json",
+      "codec_modes": {
+        "direct_exact": 111,
+        "packed_exact": 0,
+        "predicted_exact": 11,
+        "control": 38
+      },
+      "source_kinds": {
+        "text": 40,
+        "json": 36,
+        "binary": 46
+      },
+      "bytes": {
+        "original_payload_bytes": 11478,
+        "encoded_payload_bytes": 13042,
+        "protected_wire_bytes": 21522,
+        "payload_savings_vs_original_pct": -13.62606725910438,
+        "wire_savings_vs_original_pct": -87.50653423941452,
+        "wire_overhead_vs_encoded_pct": 65.0207023462659,
+        "records_zstd_compressed": 8,
+        "records_not_compressed": 152,
+        "zstd_savings_bytes": 192,
+        "pre_zstd_payload_bytes": 1581,
+        "post_zstd_payload_bytes": 1389
+      },
+      "exactness": {
+        "checked_events": 122,
+        "exact_round_trips": 122,
+        "exact_round_trip_rate": 1.0
+      },
+      "latency": {
+        "encode_total_ns": 8739209,
+        "encode_avg_ns": 54620.05625,
+        "decode_total_ns": 1625732,
+        "decode_avg_ns": 10160.825
+      },
+      "predictive_memory": {
+        "route_family_share": {
+          "3": 0.30625,
+          "1": 0.69375
+        },
+        "sync_risk_fallback_count": 0,
+        "exact_atom_direct_state_fallback_count": 0,
+        "transform_demoted_fallback_count": 0
+      },
+      "compress_pipeline": {
+        "zstd_dict_count": 28,
+        "zstd_raw_count": 0,
+        "delta_count": 30,
+        "template_count": 27,
+        "passthrough_count": 37,
+        "original_bytes": 11478,
+        "compressed_bytes": 9865,
+        "savings_pct": 14.052970900853811,
+        "dicts_trained": 2,
+        "templates_registered": 1,
+        "avg_compress_ns": 10739.557377049181,
+        "avg_decompress_ns": 3210.401639344262
+      }
+    }
+  ],
+  "divergences": [
+    "evaluation presets now converge on the same exact-state lane",
+    "evaluation baselines now compare original payload bytes, encoded payload bytes, and protected wire bytes; predictive-memory route metrics replaced semantic vector utility metrics"
+  ]
+}

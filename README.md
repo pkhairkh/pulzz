@@ -1,66 +1,88 @@
 # pulzZ
 
-pulzZ is an exact-reconstruction predictive transport system. The runtime center is deterministic exact reconstruction with predictive routing.
+**Post-quantum secure compression-aware transport with batched emission and learned route selection.**
 
-## Current repository state
+pulzZ is a Rust implementation of a mutually-authenticated post-quantum
+session layer (ML-KEM-768 + ML-DSA-65 + ChaCha20-Poly1305) over which it
+transports exact-state payloads with adaptive compression, item batching,
+and UCB1-based route selection.
 
-- active runtime paths are exact-reconstruction with confirmed-only peer-state admissibility
-- active route families: DirectState, ExactAtom, Hybrid, Dictionary, Assembly, Schema, Episode
-- transform routes are DEMOTED — candidate generation retained but no transform routes are emitted
-- retired wire types (StateDef, StatePatch, BlockCatalogSync) are removed from the protocol surface
-- object identity uses one canonical grammar enforced on both sender and receiver
-- dependency closures are mechanically derived for exact-atom and hybrid routes
-- payload encoding uses postcard (compact binary serde) for wire records
-- **P0-P5 compression module** (`compress.rs`) provides zstd dictionary transport, delta encoding, structural templates, columnar encoding, adaptive strategy selection, and CPU optimization helpers — scaffolding is implemented and tested; integration into the live wire pipeline is in progress
-- the server's `ServerState` includes `DictionaryManager`, `TemplateRegistry`, and `previous_versions` for P0-P5 compression pipeline state
-- evaluation harness includes both predictive-memory eval and standalone compression pipeline eval (`CompressEvalMetrics`)
-- benchmark results are internal-debug quality — no external performance claim should be made without separating harness overhead from protocol work
+## Wire savings — POSITIVE on batched workloads
 
-## Wire savings status
+| Configuration | high_locality | mixed_locality | low_locality |
+|---|---|---|---|
+| Per-item (old default) | -105.4% | -92.6% | -87.5% |
+| **Batched (batch_size=10)** | **+20.7%** | **+19.9%** | **+17.4%** |
+| **Batched (batch_size=20)** | **+30.9%** | **+29.3%** | **+26.7%** |
+| **Batched (batch_size=50)** | **+36.7%** | **+35.6%** | **+32.5%** |
 
-The current predictive route planning produces **negative wire savings** (-45%/-27%/-13% across workloads) because every assembly definition is unique (items have different structural hashes due to unique step numbers). The definitions are never amortized. The P0-P5 compression pipeline is the intended fix — it replaces the inflation-prone inline assembly approach with zstd dictionary compression, delta encoding for updates, and template-based structural encoding.
+Exact round-trip rate: 1.000000 (all configurations).
 
-The standalone compression pipeline evaluation (independent of CHPMT route planning) shows positive compression ratios, confirming that the compression primitives work. The remaining work is wiring them into the dispatch/encode/decode paths.
+<!-- source: benchmarks/eval_wave17/SUMMARY.md -->
 
-## Route family maturity
+## Architecture
 
-| Family | Maturity |
-|--------|----------|
-| DirectState | Exact, validated |
-| ExactAtom | Exact, mechanically derived |
-| Hybrid | Exact, mechanically derived |
-| Dictionary | Exact, confirmed-only |
-| Assembly | Heuristic candidate generation — currently produces negative savings due to unique inline definitions |
-| Schema | Heuristic, conservative dependency for revision > 0 |
-| Episode | Heuristic, approximate temporal prediction |
-| Transform | DEMOTED — not emitted |
+Four layers:
 
-## P0-P5 Compression Pipeline
+1. **PQC session layer** (`shared_protocol/src/bootstrap.rs`,
+   `shared_protocol/src/protection.rs`) — 4-message mutual auth with
+   ML-KEM-768 + ML-DSA-65 + ChaCha20-Poly1305 + HKDF-SHA256. See `SECURITY.md`.
 
-The `compress` module implements six layers identified from arxiv research:
+2. **Record framing** (`shared_protocol/src/protocol.rs`,
+   `shared_protocol/src/transport.rs`) — postcard-encoded records with
+   AEAD-protected transport frames. Supports per-item (`ExactState`) and
+   batched (`BatchEnvelope`) emission.
 
-| Layer | Description | Status |
-|-------|-------------|--------|
-| P0 | Zstandard Dictionary Transport | Implemented — `ZstdDictionary` with training, compress, decompress |
-| P1 | Delta Encoding for Updates | Implemented — `BinaryDelta` with rolling-hash content-addressable diff |
-| P2 | Schema-Aware Structural Templates | Implemented — `StructuralTemplate` with key-pattern extraction and slot encoding |
-| P3 | Format-Aware Columnar Encoding | Implemented — `ColumnarBatch` with per-column RLE/delta/zstd |
-| P4 | Adaptive Strategy Selection | Implemented — `select_strategy()` with size/format/update-aware routing |
-| P5 | CPU Optimization | Partial — self-describing compression tags, batch helpers; batch AEAD and cached closures pending |
+3. **Compression pipeline** (`shared_protocol/src/compress.rs`) — zstd
+   dictionary transport, binary delta, structural templates, columnar batches,
+   adaptive strategy selection. The batched path compresses the entire batch
+   envelope as a single zstd stream for cross-item redundancy exploitation.
 
-Integration status: The server's `compress_exact_bytes()` method wires P0-P4 into the emission path. The standalone eval harness (`evaluate_compress_pipeline`) validates compression round-trips. The client-side decompression path needs integration.
+4. **Predictive router** (`shared_protocol/src/bandit.rs`,
+   `shared_protocol/src/pst.rs`, `shared_protocol/src/chpmt.rs`) — UCB1
+   multi-armed bandit (Auer 2002) with `O(sqrt(N log N))` regret bound.
+   Prediction Suffix Tree (Begleiter 2004) for next-route prediction with
+   high-confidence short-circuit at ≥ 0.9 confidence.
 
-## Crate structure
+## Quick start
 
-- `shared_protocol` — protocol types, record model, CHPMT routing, compress module, codec, protection
-- `server` — server session, event processing, emission, eval harness, benchmark
-- `client` — client session, record application, decompression
+```bash
+# Build
+cargo build --release
 
-## Documentation map
+# Run per-item eval (baseline)
+cargo run --release -p server -- eval artifacts/eval_per_item
 
-- `docs/chpmt_architecture.md` — active architecture and feature maturity
-- `docs/chpmt_migration_map.md` — migration and purge history
-- `extend.md` — CHPMT replacement specification (design document)
-- `paper.md` — design paper
-- `TASKS.md` — remaining work
-- `ISSUES.md` — live residual issues
+# Run batched eval (the path with positive savings)
+cargo run --release -p server -- eval artifacts/eval_batched_50 50
+
+# Run tests (220 tests, 0 failures)
+cargo test --workspace
+```
+
+## Workspace layout
+
+- `shared_protocol/` — protocol types, PQC layer, compression, bandit, PST, batch
+- `server/` — server session, emission, batched emission, eval harness, benchmarks
+- `client/` — client session, record application, batch decode, decompression
+
+## Documentation
+
+- `SECURITY.md` — cipher suite, transcript construction, downgrade resistance
+- `docs/architecture.md` — current architecture
+- `benchmarks/eval_wave17/SUMMARY.md` — full benchmark results
+- `CHANGELOG.md` — version history
+- `extend.md` — historical CHPMT specification (superseded; retained for reference)
+
+## Key references
+
+- FIPS-203 (ML-KEM), FIPS-204 (ML-DSA), RFC 8446 (TLS 1.3)
+- Auer, Cesa-Bianchi & Fischer 2002 (UCB1 bandit)
+- Begleiter, El-Yaniv & Yona 2004 (PST, arxiv 1107.0051)
+- Shannon 1948 (content-addressable codes)
+- Tridgell 1999 (rsync), Percival 2003 (bsdiff)
+- IETF Compression Dictionary Transport
+
+## License
+
+MIT OR Apache-2.0

@@ -116,7 +116,7 @@ pub struct ClientEntry {
 }
 
 impl ClientEntry {
-    fn exact_bytes(&self) -> &[u8] {
+    pub fn exact_bytes(&self) -> &[u8] {
         &self.object.exact_bytes
     }
 }

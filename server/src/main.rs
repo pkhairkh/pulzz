@@ -221,15 +221,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .next()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("artifacts/eval"));
+            let batch_size: Option<usize> = args.next().and_then(|s| s.parse().ok());
             if args.next().is_some() {
-                return Err("eval expects at most one optional <output_dir> argument".into());
+                return Err("eval expects at most <output_dir> [batch_size]".into());
             }
-            let report = server::eval::run_default_evaluation(&output_dir)?;
-            println!(
-                "evaluation complete (chpmt_default): {} workload reports written under {}",
-                report.workloads.len(),
-                output_dir.display()
-            );
+            if let Some(bs) = batch_size {
+                // Wave 17: batched evaluation path.
+                let config = server::eval::EvaluationConfig::default();
+                let report = server::eval::run_evaluation_batched(&config, &output_dir, bs)?;
+                println!(
+                    "evaluation complete (batched, batch_size={}): {} workload reports written under {}/batched",
+                    bs,
+                    report.workloads.len(),
+                    output_dir.display()
+                );
+            } else {
+                let report = server::eval::run_default_evaluation(&output_dir)?;
+                println!(
+                    "evaluation complete (chpmt_default): {} workload reports written under {}",
+                    report.workloads.len(),
+                    output_dir.display()
+                );
+            }
             Ok(())
         }
         Some("serve") => {
@@ -294,7 +307,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 fn print_help() {
     println!(
         "pulzz server commands:
-  cargo run -p server -- eval [output_dir]
+  cargo run -p server -- eval [output_dir] [batch_size]
   cargo run -p server -- serve [full] [addr] [connections]
   cargo run -p server -- verify [full] [url] [repetitions] [output_json]
   cargo run --release -p server -- bench fetch-corpus <wikitext_103_raw|web_image_50>
