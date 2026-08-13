@@ -255,7 +255,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "getrandom 0.2.17",
- "js-sys",
+ "js-sys 0.3.94",
  "quinn",
  "rand 0.8.5",
  "rustls",
@@ -267,7 +267,7 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "wasm-bindgen",
- "wasm-bindgen-futures",
+ "wasm-bindgen-futures 0.4.67",
  "web-sys",
  "webtrans-quinn",
  "webtrans-wasm",
@@ -598,6 +598,12 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "futures"
+version = "0.1.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a471a38ef8ed83cd6e40aa59c1ffe17db6855c18e3604d9c4ed8c08ebc28678"
+
+[[package]]
+name = "futures"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b147ee9d1f6d097cef9ce628cd2ee62288d963e16fb287bd9286455b241382d"
@@ -701,7 +707,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
- "js-sys",
+ "js-sys 0.3.94",
  "libc",
  "wasi",
  "wasm-bindgen",
@@ -714,7 +720,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
- "js-sys",
+ "js-sys 0.3.94",
  "libc",
  "r-efi",
  "wasip2",
@@ -1010,6 +1016,15 @@ checksum = "9afb3de4395d6b3e67a780b6de64b51c978ecf11cb9a462c66be7d4ca9039d33"
 dependencies = [
  "getrandom 0.3.4",
  "libc",
+]
+
+[[package]]
+name = "js-sys"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e498c857d4a88b67902c79628d09333ebef2f2be3246b385f0b690bd6e69b49d"
+dependencies = [
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1364,6 +1379,18 @@ dependencies = [
  "shared_protocol",
  "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "pulzz-wasm"
+version = "0.1.0"
+dependencies = [
+ "js-sys 0.3.94",
+ "pulzz-sdk",
+ "shared_protocol",
+ "wasm-bindgen",
+ "wasm-bindgen-futures 0.2.22",
+ "web-sys",
 ]
 
 [[package]]
@@ -2241,11 +2268,22 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
+version = "0.2.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc62c1591689b3aa0722b2864c8872088b7796dcf0cb438406aabfda91412d47"
+dependencies = [
+ "futures 0.1.31",
+ "js-sys 0.2.7",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "wasm-bindgen-futures"
 version = "0.4.67"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03623de6905b7206edd0a75f69f747f134b7f0a2323392d664448bf2d3c5d87e"
 dependencies = [
- "js-sys",
+ "js-sys 0.3.94",
  "wasm-bindgen",
 ]
 
@@ -2289,7 +2327,7 @@ checksum = "48465a648c14f53f6d8319b95bc336a44627f6aa6bd94270463777af8ed65deb"
 dependencies = [
  "thiserror 2.0.18",
  "wasm-bindgen",
- "wasm-bindgen-futures",
+ "wasm-bindgen-futures 0.4.67",
  "web-sys",
 ]
 
@@ -2299,7 +2337,7 @@ version = "0.3.94"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd70027e39b12f0849461e08ffc50b9cd7688d942c1c8e3c7b22273236b4dd0a"
 dependencies = [
- "js-sys",
+ "js-sys 0.3.94",
  "wasm-bindgen",
 ]
 
@@ -2309,7 +2347,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
- "js-sys",
+ "js-sys 0.3.94",
  "wasm-bindgen",
 ]
 
@@ -2342,7 +2380,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "252323fb2c01cbfb07d2987baeca0b5d8a6e7b5444ed124f648820119083b92a"
 dependencies = [
  "bytes",
- "futures",
+ "futures 0.3.32",
  "futures-util",
  "http",
  "quinn",
@@ -2375,11 +2413,11 @@ checksum = "9b3f40dfe8abdb7892fd780b84a97d4416cce9dbfba9a0127588800f96d78441"
 dependencies = [
  "bytes",
  "futures-io",
- "js-sys",
+ "js-sys 0.3.94",
  "thiserror 2.0.18",
  "url",
  "wasm-bindgen",
- "wasm-bindgen-futures",
+ "wasm-bindgen-futures 0.4.67",
  "web-streams",
  "web-sys",
  "webtrans-trait",

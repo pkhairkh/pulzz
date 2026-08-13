@@ -1,0 +1,24 @@
+[package]
+name = "pulzz-wasm"
+version.workspace = true
+edition.workspace = true
+description = "WASM/JS binding for pulzZ SDK via wasm-bindgen."
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# Dependencies are wasm-only — the crate body is `#![cfg(target_arch = "wasm32")]`
+# so on native targets it compiles to an empty library, allowing the workspace
+# to build cleanly without clang/zstd-sys.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+pulzz-sdk = { path = "../../sdk" }
+shared_protocol = { path = "../../shared_protocol" }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "BinaryType", "ErrorEvent", "CloseEvent"] }
+
+[lib]
+name = "pulzz_wasm"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"

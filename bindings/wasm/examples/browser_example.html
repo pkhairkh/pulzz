@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>pulzZ WASM browser example</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 60ch; margin: 2rem auto; padding: 0 1rem; }
+    pre { background: #f4f4f4; padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
+    button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
+    .ok { color: #0a0; }
+    .err { color: #c00; }
+  </style>
+</head>
+<body>
+  <h1>pulzZ WASM browser example</h1>
+  <p>This page loads the pulzZ WASM module, constructs a <code>PulzzWasmClient</code>, and attempts to connect to a WebSocket server.</p>
+
+  <p>
+    Server URL:
+    <input id="url" value="ws://localhost:8080" style="width: 30ch;" />
+    <button id="connect">Connect</button>
+    <button id="send">Send batch</button>
+    <button id="recv">Recv</button>
+  </p>
+
+  <pre id="log">Loading WASM...</pre>
+
+  <script type="module">
+    import init, { PulzzWasmClient, pulzz_version } from './pkg/pulzz_wasm.js';
+
+    const logEl = document.getElementById('log');
+    let client = null;
+
+    function log(msg, cls) {
+      const span = document.createElement('span');
+      span.className = cls ?? '';
+      span.textContent = msg + '\n';
+      logEl.appendChild(span);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    async function main() {
+      await init();
+      log('pulzZ ' + pulzz_version(), 'ok');
+
+      client = new PulzzWasmClient({
+        carrier: 'websocket',
+        security: 'pq_simple_v1',
+        batchSize: 50,
+        zstdLevel: 0,
+        timeoutMs: 5000,
+      });
+      log('client constructed');
+    }
+
+    document.getElementById('connect').onclick = async () => {
+      const url = document.getElementById('url').value;
+      try {
+        await client.connect(url);
+        log('connected to ' + url, 'ok');
+      } catch (e) {
+        log('connect failed: ' + (e?.message ?? e), 'err');
+      }
+    };
+
+    document.getElementById('send').onclick = async () => {
+      try {
+        await client.sendBatch([
+          { itemId: 1, payload: new Uint8Array([1, 2, 3]) },
+          { itemId: 2, payload: new Uint8Array([4, 5, 6]) },
+          { itemId: 3, payload: new Uint8Array([7, 8, 9]) },
+        ]);
+        log('batch sent', 'ok');
+      } catch (e) {
+        log('send failed: ' + (e?.message ?? e), 'err');
+      }
+    };
+
+    document.getElementById('recv').onclick = async () => {
+      try {
+        const record = await client.recv(1000);
+        if (record === null || record === undefined) {
+          log('recv: no record');
+        } else {
+          log('recv: itemId=' + record.itemId + ', payload=' + record.payload.length + ' bytes, type=' + record.recordType, 'ok');
+        }
+      } catch (e) {
+        log('recv failed: ' + (e?.message ?? e), 'err');
+      }
+    };
+
+    main().catch((e) => log('init failed: ' + e, 'err'));
+  </script>
+</body>
+</html>
