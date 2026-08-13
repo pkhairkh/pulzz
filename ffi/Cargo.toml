@@ -16,6 +16,6 @@ tokio = { workspace = true }
 libc = "0.2"
 
 [lib]
-name = "pulzz"
+name = "pulzz_ffi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 path = "src/lib.rs"

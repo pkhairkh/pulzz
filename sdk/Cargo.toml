@@ -19,6 +19,7 @@ rand = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "net", "time", "io-util"] }
 rand = { workspace = true }
+pulzz-ffi = { path = "../ffi" }
 
 [lib]
 name = "pulzz_sdk"

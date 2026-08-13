@@ -44,10 +44,34 @@ cargo run --release -p server --example pq_batched_benchmark
 - `shared_protocol/` — protocol types, PQC, compression, batch, bandit, PST
 - `server/` — session, batched emission, eval harness
 - `client/` — session, batch decode, decompression
+- `sdk/` — Rust SDK (idiomatic async API; wraps client + server)
+- `ffi/` — C ABI (`extern "C"` + `pulzz.h` via cbindgen)
+- `bindings/wasm/` — WASM/JS binding via wasm-bindgen
+- `bindings/python/` — Python binding via PyO3
+- `bindings/go/` — Go binding via cgo
+- `examples/` — cross-language quickstart examples
+
+## SDK
+
+The pulzZ SDK exposes a unified, idiomatic API across five languages:
+Rust (native), C, JavaScript/WASM, Python, and Go. All bindings share
+the same wire protocol, PQC handshake, and batch envelope format.
+
+**Quickstart by language:**
+
+- **Rust:** `cargo run --example quickstart -p pulzz-sdk`
+- **C:** `cc examples/c_quickstart.c -I ffi/include target/debug/libpulzz_ffi.a -lpthread -o c_quickstart && ./c_quickstart`
+- **Python:** `cd bindings/python && maturin develop && python3 examples/python_quickstart.py`
+- **Go:** `cd bindings/go && CGO_LDFLAGS="../target/debug/libpulzz_ffi.a -lpthread" go test ./...`
+- **JS/WASM:** `wasm-pack build --target nodejs bindings/wasm && node examples/js_quickstart.mjs`
+
+Full multi-language usage guide: [`docs/sdk.md`](docs/sdk.md).
 
 ## Docs
 
+- `docs/sdk.md` — full multi-language SDK usage guide
 - `docs/architecture.md` — full architecture
+- `docs/SDK_PROPOSAL.md` — original SDK design proposal
 - `SECURITY.md` — cipher suite, transcript, downgrade resistance
 - `CHANGELOG.md` — version history
 - `benchmarks/eval_wave17/SUMMARY.md` — full benchmark results

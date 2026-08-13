@@ -1,9 +1,10 @@
+#![allow(unused_unsafe, unused_imports)]
 //! FFI client C API tests, called from Rust. Verifies the round-trip via
 //! the `pulzz_*` extern "C" surface without requiring an actual C compiler.
 
 #![allow(clippy::missing_safety_doc)]
 
-use pulzz::*;
+use pulzz_ffi::*;
 use std::ffi::CString;
 use std::os::raw::c_char;
 use std::ptr;

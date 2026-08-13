@@ -1,9 +1,10 @@
+#![allow(unused_unsafe, unused_imports)]
 //! FFI server C API tests, called from Rust. Verifies handle lifecycle
 //! and basic null-checks without spinning up a real listener.
 
 #![allow(clippy::missing_safety_doc)]
 
-use pulzz::*;
+use pulzz_ffi::*;
 use std::ptr;
 
 #[test]
