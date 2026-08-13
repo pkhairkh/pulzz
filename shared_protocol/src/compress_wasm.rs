@@ -18,7 +18,7 @@ pub fn starts_with_compression_tag(_data: &[u8]) -> bool {
     false
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct DictionaryManager;
 impl DictionaryManager {
     pub fn add_sample(&mut self, _kind: SourceKind, _data: &[u8]) {}
@@ -28,7 +28,7 @@ impl DictionaryManager {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct TemplateRegistry;
 impl TemplateRegistry {
     pub fn try_register(&mut self, _kind: SourceKind, _data: &[u8]) {}
@@ -37,13 +37,13 @@ impl TemplateRegistry {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct CompressorCache;
 impl CompressorCache {
     pub fn record_compress(&mut self, _dict_id: Option<u64>) {}
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct CompressionBudget;
 impl CompressionBudget {
     pub fn within_budget_for_size(&self, _size: usize) -> bool {
@@ -51,10 +51,10 @@ impl CompressionBudget {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct ColumnarBatchAccumulator;
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct StrategyPerformanceTracker;
 impl StrategyPerformanceTracker {
     pub fn select_strategy_with_feedback(
