@@ -4756,6 +4756,60 @@ impl ServerSession {
             .map_err(ServerError::Protection)
     }
 
+    /// Wave 13 T-13-b: Emit a batch of items as a single BatchEnvelope record.
+    ///
+    /// Each item is compressed via `compress_exact_bytes` (the P0-P5 pipeline),
+    /// then wrapped in a `BatchEnvelope` payload. The entire batch is protected
+    /// by a single AEAD tag and transported in a single record, amortizing the
+    /// per-item overhead (AEAD tag + record header + transport envelope ≈ 94 B)
+    /// across all items in the batch.
+    ///
+    /// For 100 items at ~90 B each: wire bytes drop from ~18400 (per-item) to
+    /// ~10500 (batched) — a ~43% reduction.
+    ///
+    /// Returns the single BatchEnvelope record.
+    pub fn emit_batch<I>(&mut self, items: I) -> Result<Record, ServerError>
+    where
+        I: IntoIterator<Item = (ItemId, ExactStateMaterial)>,
+    {
+        let mut envelope = shared_protocol::batch::BatchEnvelope::new();
+        for (item_id, material) in items {
+            let source_kind = self
+                .state
+                .source_bindings
+                .get(&item_id)
+                .map(|d| d.kind)
+                .unwrap_or(shared_protocol::SourceKind::Binary);
+            let compressed = self
+                .state
+                .compress_exact_bytes(source_kind, item_id, &material.exact_bytes);
+            envelope.push(item_id, source_kind, compressed);
+        }
+        let payload = envelope
+            .encode()
+            .map_err(|e| ServerError::ValidationPayload(shared_protocol::WireError::InvalidPayload(e.to_string())))?;
+        let ctx = self.header_context();
+        let header = shared_protocol::protocol::RecordHeader {
+            version: shared_protocol::protocol::PROTOCOL_VERSION,
+            stream_id: ctx.stream_id,
+            seq_no: ctx.seq_no,
+            record_type: shared_protocol::RecordType::BatchEnvelope,
+            flags: shared_protocol::protocol::RecordFlags::empty(),
+            item_id: ItemId(0),
+            payload_len: payload.len() as u32,
+            codec_mode: shared_protocol::protocol::CodecMode::DirectExact,
+            epoch_id: ctx.epoch_id,
+        };
+        let record = shared_protocol::protocol::Record {
+            header,
+            payload,
+            auth_tag: [0u8; 16],
+        };
+        self.protector
+            .protect_record(record)
+            .map_err(ServerError::Protection)
+    }
+
     pub fn emit_trace<I>(&mut self, events: I) -> Result<Vec<Record>, ServerError>
     where
         I: IntoIterator<Item = ServerEvent>,

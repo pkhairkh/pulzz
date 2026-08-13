@@ -1849,7 +1849,7 @@ pub fn should_skip_compression_for_coordination(
         | crate::RecordType::MemoryRetire
         | crate::RecordType::TransformCorrect
         | crate::RecordType::MemoryAck => Some(SkipCompressionReason::ControlOrCoordinationRecord),
-        crate::RecordType::ExactState => None,
+        crate::RecordType::ExactState | crate::RecordType::BatchEnvelope => None,
     }
 }
 

@@ -44,6 +44,17 @@ pub enum RecordType {
     MemoryRetire = 18,
     TransformCorrect = 19,
     MemoryAck = 20,
+    /// Wave 13 T-13-a: Batch envelope wrapping N items in a single AEAD-
+    /// protected transport frame. Each batch item carries its own item_id,
+    /// source_kind, and compressed payload, but the AEAD tag, record header,
+    /// and transport envelope overhead is amortized across all items in the
+    /// batch.
+    ///
+    /// Wire format (postcard-encoded):
+    ///   [item_count: u16][item_0][item_1]...[item_N-1]
+    /// where each item is:
+    ///   [item_id: u64][source_kind: u8][payload_len: u32][payload: [u8; payload_len]]
+    BatchEnvelope = 21,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -203,6 +214,7 @@ impl RecordHeader {
 
         match self.record_type {
             RecordType::ExactState => validate_data_header(self)?,
+            RecordType::BatchEnvelope => validate_data_header(self)?,
             RecordType::Rekey | RecordType::Resync | RecordType::Close => {
                 validate_control_header(self)?
             }
@@ -684,7 +696,7 @@ pub enum WireError {
 impl RecordType {
     pub const fn route_family(self) -> crate::RouteFamily {
         match self {
-            Self::ExactState | Self::MemoryRetire | Self::MemoryAck => {
+            Self::ExactState | Self::BatchEnvelope | Self::MemoryRetire | Self::MemoryAck => {
                 crate::RouteFamily::DirectState
             }
             Self::PredictiveConfirm => crate::RouteFamily::PredictiveConfirm,
@@ -705,7 +717,7 @@ impl RecordType {
 
     pub const fn object_kind(self) -> crate::ObjectKind {
         match self {
-            Self::ExactState => crate::ObjectKind::ExactState,
+            Self::ExactState | Self::BatchEnvelope => crate::ObjectKind::ExactState,
             Self::MemoryRetire | Self::MemoryAck => crate::ObjectKind::PredictiveObject,
             Self::PredictiveConfirm | Self::PredictiveCorrect => crate::ObjectKind::SparseCue,
             Self::TransformCorrect => crate::ObjectKind::Transform,
@@ -741,6 +753,7 @@ impl RecordType {
             18 => Ok(Self::MemoryRetire),
             19 => Ok(Self::TransformCorrect),
             20 => Ok(Self::MemoryAck),
+            21 => Ok(Self::BatchEnvelope),
             other => Err(WireError::UnknownRecordType(other)),
         }
     }
@@ -773,6 +786,14 @@ fn validate_data_header(header: RecordHeader) -> Result<(), ValidationError> {
         {
             return Err(ValidationError::InvalidDataFlags);
         }
+        return Ok(());
+    }
+
+    // Wave 13 T-13-a: BatchEnvelope records use item_id=0 (the batch is
+    // identified by the record itself, not by a single item_id) and may
+    // have an empty payload (empty batch). Skip the standard data-header
+    // contract check for BatchEnvelope.
+    if header.record_type == RecordType::BatchEnvelope {
         return Ok(());
     }
 
@@ -820,6 +841,7 @@ fn validate_control_header(header: RecordHeader) -> Result<(), ValidationError> 
         | RecordType::EpisodeHint
         | RecordType::ReplayHint
         | RecordType::ExactState
+        | RecordType::BatchEnvelope
         | RecordType::MemoryRetire
         | RecordType::TransformCorrect
         | RecordType::MemoryAck => {

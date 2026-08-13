@@ -588,6 +588,7 @@ impl StreamProtector {
                 self.stream_state = StreamState::Closed;
             }
             RecordType::ExactState
+            | RecordType::BatchEnvelope
             | RecordType::Resync
             | RecordType::SourceMeta
             | RecordType::Repair

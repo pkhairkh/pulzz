@@ -2,6 +2,7 @@
 // Active CHPMT routing, predictive caches, and predictor state are cue/object-native; native exact-state objects are the only active payload form.
 
 pub mod bandit;
+pub mod batch;
 pub mod bootstrap;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod carrier;
@@ -22,6 +23,7 @@ pub mod transport;
 pub mod vector;
 
 pub use bandit::*;
+pub use batch::*;
 pub use bootstrap::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use carrier::*;

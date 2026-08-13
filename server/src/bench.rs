@@ -6817,6 +6817,7 @@ fn store_result_fingerprint(artifact_dir: &std::path::Path, case: &BenchmarkCase
 fn benchmark_payload_len(record: &Record) -> u64 {
     match record.header.record_type {
         shared_protocol::RecordType::ExactState
+        | shared_protocol::RecordType::BatchEnvelope
         | shared_protocol::RecordType::PredictiveConfirm
         | shared_protocol::RecordType::PredictiveCorrect
         | shared_protocol::RecordType::TransformCorrect

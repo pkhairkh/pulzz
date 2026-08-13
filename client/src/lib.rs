@@ -394,7 +394,7 @@ impl ClientState {
         let record = record.validate().map_err(ClientApplyError::Validation)?;
 
         match record.header.record_type {
-            RecordType::ExactState => self.apply_data_record(record),
+            RecordType::ExactState | RecordType::BatchEnvelope => self.apply_data_record(record),
             RecordType::Rekey | RecordType::Close => Ok(()),
             RecordType::Resync => self.apply_resync_record(record),
             RecordType::SourceMeta => self.apply_source_meta_record(record),
@@ -411,6 +411,81 @@ impl ClientState {
             RecordType::ReplayHint => self.apply_replay_hint_record(record),
             RecordType::MemoryAck => Ok(()),
         }
+    }
+
+    /// Wave 13 T-13-c: Apply a BatchEnvelope record by decoding the envelope,
+    /// then decompressing and caching each item.
+    ///
+    /// Each item in the batch carries its own item_id, source_kind, and
+    /// compressed payload. The decompression path is the same as the
+    /// single-item path (calls `decode_compressed_payload` with the client's
+    /// dict_manager / template_registry / previous_versions).
+    fn apply_batch_envelope(
+        &mut self,
+        header: RecordHeader,
+        payload: Vec<u8>,
+    ) -> Result<(), ClientApplyError> {
+        let envelope = shared_protocol::batch::BatchEnvelope::decode(&payload)
+            .map_err(|e| ClientApplyError::PredictiveDispatch(e.to_string()))?;
+        for item in envelope.items {
+            // Decompress each item's payload using the existing P0-P5 path.
+            let decompressed = if shared_protocol::starts_with_compression_tag(&item.payload) {
+                let result = shared_protocol::decode_compressed_payload(
+                    &item.payload,
+                    &self.dict_manager,
+                    &self.template_registry,
+                    &self.previous_versions,
+                    item.source_kind,
+                );
+                match &result {
+                    Ok(d) => d.clone(),
+                    Err(_) => {
+                        // Fallback: strip the 2-byte compression prefix.
+                        if item.payload.len() > 2 {
+                            item.payload[2..].to_vec()
+                        } else {
+                            item.payload.clone()
+                        }
+                    }
+                }
+            } else {
+                item.payload.clone()
+            };
+            // Feed the decompressed sample to the dict_manager for future training.
+            self.dict_manager.add_sample(item.source_kind, &decompressed);
+            if item.source_kind == shared_protocol::SourceKind::Json {
+                self.template_registry
+                    .try_register(item.source_kind, &decompressed);
+            }
+            self.dict_manager.maybe_train(item.source_kind);
+            // Store the decompressed bytes in the client cache.
+            let descriptor = shared_protocol::source::SourceDescriptor {
+                kind: item.source_kind,
+                source_hash: shared_protocol::compute_source_hash(
+                    item.source_kind,
+                    None,
+                    &decompressed,
+                ),
+                byte_len: decompressed.len(),
+                mime: None,
+                label: None,
+            };
+            let object_key = descriptor.runtime_object_key_from_bytes(&decompressed);
+            let object = shared_protocol::source::ChpmtObject::from_exact_bytes(
+                descriptor,
+                object_key,
+                item.source_kind,
+                shared_protocol::ObjectKind::ExactState,
+                shared_protocol::chpmt::derive_sparse_cue_from_bytes(item.source_kind, &decompressed),
+                decompressed,
+            );
+            let entry = ClientEntry { object };
+            self.cache.insert(item.item_id, entry);
+            self.previous_versions
+                .insert(item.item_id.0, item.payload.clone());
+        }
+        let _ = header; // header validated by caller
+        Ok(())
     }
 
     fn apply_resync_record(&mut self, record: Record) -> Result<(), ClientApplyError> {
@@ -660,6 +735,13 @@ impl ClientState {
             self.source_bindings.remove(&header.item_id);
             self.prune_resolved_repair_requests();
             return Ok(());
+        }
+
+        // Wave 13 T-13-c: BatchEnvelope records contain multiple items in a
+        // single AEAD-protected payload. Decode the envelope, then apply each
+        // item's compressed payload through the existing decompression path.
+        if header.record_type == RecordType::BatchEnvelope {
+            return self.apply_batch_envelope(header, record.payload);
         }
 
         let predictor_state = self.predictor_state_for(header.item_id);
