@@ -54,4 +54,4 @@ cargo run --release -p server --example pq_batched_benchmark
 
 ## License
 
-MIT OR Apache-2.0
+CCL-X-1.2

@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Predictive-memory transport for exact-state state across browser and native clients with mutual post-quantum authenticated sessions."
 repository = "https://github.com/pkhairkh/pulzz.git"
-license = "MIT OR Apache-2.0"
+license = "CCL-X-1.2"
 publish = false
 
 [workspace.dependencies]
