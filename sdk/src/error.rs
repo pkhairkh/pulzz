@@ -81,7 +81,10 @@ impl SdkError {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+// NOTE: ClientApplyError is defined in the `client` crate and is available on
+// both native and wasm32 targets (it only references shared_protocol error
+// types, which are wasm-safe). Leave this impl ungated so SDK consumers on
+// wasm32 can still convert client apply errors into SdkError.
 impl From<client::ClientApplyError> for SdkError {
     fn from(err: client::ClientApplyError) -> Self {
         match err {
@@ -114,6 +117,7 @@ impl From<client::ClientConnectError> for SdkError {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<server::ServerError> for SdkError {
     fn from(err: server::ServerError) -> Self {
         match err {

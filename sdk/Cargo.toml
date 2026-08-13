@@ -10,11 +10,15 @@ repository.workspace = true
 [dependencies]
 shared_protocol = { path = "../shared_protocol" }
 client = { path = "../client" }
-server = { path = "../server" }
-tokio = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 rand = { workspace = true }
+
+# Native-only: tokio (with "net") + server crate pull in quinn/rustls/aws-lc-sys
+# which cannot build for wasm32-unknown-unknown (no <sys/types.h>).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+server = { path = "../server" }
+tokio = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "net", "time", "io-util"] }

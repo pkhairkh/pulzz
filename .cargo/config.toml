@@ -1,0 +1,9 @@
+[target.wasm32-unknown-unknown]
+rustflags = [
+  "--cfg", "web_sys_unstable_apis",
+]
+
+# NOTE: build-std is only needed for the cdylib link path (Wave 3). Left
+# commented out so stable cargo can still build rlib targets for wasm32.
+# [unstable]
+# build-std = ["std", "panic_abort"]
