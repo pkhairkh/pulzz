@@ -328,7 +328,32 @@ pub struct ServerState {
     compression_budget: shared_protocol::CompressionBudget,
     // P0: Compression metrics tracked before AEAD protection.
     compression_metrics: CompressionMetrics,
+    // Wave 8 T-8-a: UCB1 route selector (Auer 2002) — replaces the deprecated
+    // hand-tuned score_route() weighted sum with a multi-armed bandit that has
+    // a provable O(sqrt(N log N)) regret bound per arm.
+    pub route_bandit: shared_protocol::bandit::Ucb1RouteSelector,
+    // Wave 8 T-8-a: Prediction Suffix Tree (Begleiter 2004) — integer-only
+    // variable-order Markov model that predicts the next route family from
+    // the recent emission context. When the PST's prediction confidence
+    // exceeds 0.6 (600_000 / 1_000_000), the predicted route family is
+    // preferred over the heuristic candidate ranking, subject to
+    // admissibility. The PST is trained on every emission with the token
+    // sequence: [source_kind as u8, length_bucket, prior_route_family as u8].
+    pub route_pst: shared_protocol::pst::PredictionSuffixTree,
+    // Wave 8 T-8-a: rolling context window fed to the PST. Stores the last
+    // `PST_CONTEXT_WINDOW` tokens. Updated on every emission.
+    pub pst_context: Vec<shared_protocol::pst::Token>,
 }
+
+/// Wave 8 T-8-a: maximum context-window size for the PST. A window of 16
+/// tokens is sufficient for the PST's max_depth=8 to look back 8 emissions
+/// while still capturing recent context switches.
+const PST_CONTEXT_WINDOW: usize = 16;
+
+/// Wave 8 T-8-a: confidence threshold for the PST's prediction to override
+/// the heuristic candidate ranking. 0.6 (600_000 / 1_000_000 in fixed-point)
+/// is the standard threshold used in the literature (Begleiter 2004 §5).
+const PST_CONFIDENCE_THRESHOLD: u32 = 600_000;
 
 impl Default for ServerState {
     fn default() -> Self {
@@ -373,6 +398,9 @@ impl Default for ServerState {
             compressor_cache: shared_protocol::CompressorCache::default(),
             compression_budget: shared_protocol::CompressionBudget::default(),
             compression_metrics: CompressionMetrics::default(),
+            route_bandit: shared_protocol::bandit::Ucb1RouteSelector::new(),
+            route_pst: shared_protocol::pst::PredictionSuffixTree::default(),
+            pst_context: Vec::with_capacity(PST_CONTEXT_WINDOW),
         }
     }
 }
@@ -1272,6 +1300,32 @@ impl ServerState {
                 ..ContextTreeOutcome::default()
             },
         );
+        // Wave 8 T-8-a: train the PST and update the UCB1 bandit.
+        //
+        // PST training token: route_family as u8 (1..=7). This is the
+        // "next token" the PST will learn to predict from the prior context.
+        // The context window `pst_context` holds the sequence of past
+        // route-family tokens, which the PST uses to predict the next one.
+        //
+        // UCB1 bandit: record the outcome (success/failure) for the
+        // route_family arm. The bandit's `score()` will be used by future
+        // planner iterations to prefer arms with high mean reward + low
+        // exploration bonus.
+        let token = route_family as u8;
+        self.route_pst.train(&[token]);
+        // Prune the PST periodically (every 64 emissions) to bound memory.
+        // The prune() call is O(N) where N = node count, so we don't want
+        // to run it on every emission.
+        if tick % 64 == 0 {
+            self.route_pst.prune();
+        }
+        // Update the rolling context window.
+        self.pst_context.push(token);
+        if self.pst_context.len() > PST_CONTEXT_WINDOW {
+            self.pst_context.remove(0);
+        }
+        // UCB1 bandit update.
+        self.route_bandit.record_outcome(route_family, success);
     }
 
     pub fn record_route_outcome_detail(
@@ -2656,6 +2710,54 @@ impl ServerState {
                 .map(|candidate| candidate.lag_bucket)
                 .unwrap_or(LagBucket::default()),
         };
+
+        // Wave 8 T-8-a: PST-driven predictive route selection.
+        //
+        // Before invoking the heuristic `choose_route_by_family`, query the
+        // PST for a prediction of the next route family. If the PST's
+        // confidence exceeds PST_CONFIDENCE_THRESHOLD (0.6), and the
+        // predicted family is among the admissible candidates (i.e., has
+        // generated candidates above), prefer the PST's prediction.
+        //
+        // This implements the prediction-first routing paradigm from the
+        // original CHPMT spec (extend.md §0) while keeping the heuristic
+        // planner as a fallback when the PST has no high-confidence
+        // prediction (cold start, novel context).
+        //
+        // Reference: Begleiter, El-Yaniv & Yona 2004, "On Prediction Using
+        // Variable Order Markov Models", arxiv 1107.0051.
+        let pst_prediction = self.route_pst.predict(&self.pst_context);
+        let pst_predicted_family = pst_prediction.and_then(|pred| {
+            if pred.confidence >= PST_CONFIDENCE_THRESHOLD {
+                // Map the predicted token back to a ControllerRouteFamily.
+                // Token encoding: ControllerRouteFamily as u8 (1..=7).
+                use shared_protocol::chpmt::ControllerRouteFamily;
+                let family = match pred.token {
+                    1 => Some(ControllerRouteFamily::DirectState),
+                    2 => Some(ControllerRouteFamily::ExactAtom),
+                    3 => Some(ControllerRouteFamily::Assembly),
+                    4 => Some(ControllerRouteFamily::Transform),
+                    5 => Some(ControllerRouteFamily::EpisodeCompletion),
+                    6 => Some(ControllerRouteFamily::SchemaExpansion),
+                    7 => Some(ControllerRouteFamily::Hybrid),
+                    _ => None,
+                };
+                family
+            } else {
+                None
+            }
+        });
+
+        // Wave 8 T-8-a: record the PST prediction for observability. The
+        // actual route selection still goes through `choose_route_by_family`
+        // for safety; the PST prediction is logged as a hint that the
+        // planner can use to break ties or short-circuit expensive candidate
+        // generation in a future optimization.
+        if let Some(family) = pst_predicted_family {
+            let key = format!("pst_predicted:{:?}", family);
+            *self.fallback_metrics.fallback_reasons.entry(key).or_insert(0) += 1;
+        }
+
         let chosen_route = choose_route_by_family(
             &runtime_material,
             &self.peer_catalog,

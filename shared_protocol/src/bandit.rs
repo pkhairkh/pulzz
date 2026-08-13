@@ -9,12 +9,13 @@ use std::collections::HashMap;
 
 use crate::chpmt::ControllerRouteFamily;
 
+#[derive(Debug)]
 pub struct Ucb1RouteSelector {
     arm_stats: HashMap<ControllerRouteFamily, ArmStats>,
     total_pulls: u64,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 struct ArmStats {
     successes: u32,
     failures: u32,
