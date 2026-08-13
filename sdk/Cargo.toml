@@ -27,6 +27,8 @@ pulzz-ffi = { path = "../ffi" }
 server = { path = "../server" }
 shared_protocol = { path = "../shared_protocol" }
 client = { path = "../client" }
+futures-util = { workspace = true }
+tokio-tungstenite = { workspace = true }
 
 [lib]
 name = "pulzz_sdk"

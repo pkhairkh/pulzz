@@ -117,6 +117,28 @@ impl PulzzServer {
         Ok(Some(PulzzSession::from_native(native, &self.config)))
     }
 
+    /// Returns the locally-bound socket address of the server's listener.
+    ///
+    /// Only available in network mode (after `bind` / `bind_with_config`).
+    /// Returns `Err(SdkError::InvalidState)` in in-memory mode (after
+    /// `from_protector`).
+    ///
+    /// # Example
+    /// ```ignore
+    /// let server = PulzzServer::bind("127.0.0.1:0").await?;
+    /// let addr = server.local_addr()?;
+    /// // addr is e.g. "127.0.0.1:54321" — clients can connect to it.
+    /// ```
+    pub fn local_addr(&self) -> Result<std::net::SocketAddr, SdkError> {
+        let acceptor = self.acceptor.as_ref().ok_or_else(|| {
+            SdkError::invalid_state(
+                "PulzzServer::local_addr requires network mode (bind/bind_with_config); \
+                 in-memory mode (from_protector) has no listener.",
+            )
+        })?;
+        acceptor.local_addr().map_err(SdkError::from)
+    }
+
     /// Emit a single `ServerEvent` as a protected Record, in-memory.
     ///
     /// **In-memory only.** This method uses the `ServerSession`'s protector
