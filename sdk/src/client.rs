@@ -81,12 +81,15 @@ impl PulzzClient {
         item_id: ItemId,
         payload: &[u8],
     ) -> Result<Record, SdkError> {
-        // The stream_id is owned by the protector; the header must match it
-        // exactly or protect_record will reject the record. In in-memory mode
-        // we can read it directly; in network mode we fall back to the
-        // placeholder's stream id (which protect_record will overwrite via
-        // the active transport's protector).
-        let stream_id = self.inner.protector().stream_id();
+        // Read stream_id + seq_no from the protector. In in-memory mode this
+        // is self.inner.protector(); in network mode the send path will
+        // re-read seq_no from the transport's protector (which actually
+        // advances) before protect_transport_records. For in-memory mode
+        // (server-push, client doesn't send) this is only used by tests.
+        let (stream_id, seq_no) = {
+            let p = self.inner.protector();
+            (p.stream_id(), p.expected_seq_no())
+        };
         // DirectExact codec mode requires the payload to start with a source
         // kind tag byte (1=text, 2=json, 3=binary, 4=image) followed by the
         // exact bytes. Prepend SourceKind::Binary so the receiver's
@@ -99,7 +102,7 @@ impl PulzzClient {
                 version: shared_protocol::PROTOCOL_VERSION,
                 stream_id,
                 epoch_id: shared_protocol::EpochId(0),
-                seq_no: shared_protocol::SeqNo(0),
+                seq_no,
                 record_type: RecordType::ExactState,
                 codec_mode: shared_protocol::CodecMode::DirectExact,
                 flags: shared_protocol::RecordFlags::empty(),
@@ -116,13 +119,21 @@ impl PulzzClient {
     /// In in-memory mode this is a no-op (the test pattern is server-push,
     /// not client-push).
     pub async fn send(&mut self, item_id: ItemId, payload: &[u8]) -> Result<(), SdkError> {
-        let plain = self.build_exact_record(item_id, payload)?;
+        let mut plain = self.build_exact_record(item_id, payload)?;
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(transport) = self.transport.as_mut() {
-                // Use protect_transport_records (not protect_record + encode)
-                // to produce the outer AEAD transport frame that the peer's
-                // unprotect_transport_frame expects. Matches PulzzSession::send.
+                // In network mode, self.inner.protector() is a placeholder
+                // that never advances. The real protector lives in the
+                // transport. Re-read seq_no + stream_id from the transport's
+                // protector before protect_transport_records, so the ratchet
+                // advances correctly across multiple sends.
+                let (stream_id, seq_no) = {
+                    let p = transport.session().protector();
+                    (p.stream_id(), p.expected_seq_no())
+                };
+                plain.header.stream_id = stream_id;
+                plain.header.seq_no = seq_no;
                 let frame = {
                     let protector = transport.session_mut().protector_mut();
                     protector
@@ -168,17 +179,20 @@ impl PulzzClient {
             envelope_bytes.clone()
         };
 
-        let stream_id = self.inner.protector().stream_id();
+        let (stream_id, seq_no) = {
+            let p = self.inner.protector();
+            (p.stream_id(), p.expected_seq_no())
+        };
         let mut flags = shared_protocol::RecordFlags::empty();
         if payload.len() < envelope_bytes.len() {
             flags.insert(shared_protocol::RecordFlags::PAYLOAD_ZSTD);
         }
-        let plain = Record {
+        let mut plain = Record {
             header: RecordHeader {
                 version: shared_protocol::PROTOCOL_VERSION,
                 stream_id,
                 epoch_id: shared_protocol::EpochId(0),
-                seq_no: shared_protocol::SeqNo(0),
+                seq_no,
                 record_type: RecordType::BatchEnvelope,
                 codec_mode: shared_protocol::CodecMode::PackedExact,
                 flags,
@@ -191,8 +205,15 @@ impl PulzzClient {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(transport) = self.transport.as_mut() {
-                // Use protect_transport_records to produce the outer AEAD
-                // transport frame (matches PulzzSession::send + client recv).
+                // Re-read seq_no + stream_id from the transport's protector
+                // (the real one that advances), overwriting the placeholder
+                // values read above. Same fix as PulzzClient::send.
+                let (stream_id, seq_no) = {
+                    let p = transport.session().protector();
+                    (p.stream_id(), p.expected_seq_no())
+                };
+                plain.header.stream_id = stream_id;
+                plain.header.seq_no = seq_no;
                 let frame = {
                     let protector = transport.session_mut().protector_mut();
                     protector

@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use shared_protocol::{ItemId, Record, StreamId};
+use shared_protocol::{ItemId, Record};
 use tokio::time::timeout;
 
 use crate::{
@@ -37,9 +37,13 @@ impl PulzzSession {
     /// protected by the session's AEAD protector as a transport frame
     /// (outer AEAD layer) before being shipped.
     pub async fn send(&mut self, item_id: ItemId, payload: &[u8]) -> Result<(), SdkError> {
-        // stream_id is owned by the protector; the header value here is
-        // overwritten by protect_transport_records before AEAD AAD computation.
-        let stream_id = StreamId(1);
+        // Read stream_id + seq_no from the protector BEFORE protect_transport_records.
+        // The protector validates record.header.seq_no == expected_seq_no() and
+        // advances the ratchet inside protect_transport_records (clone+assign).
+        let (stream_id, seq_no) = {
+            let p = self.inner.protector();
+            (p.stream_id(), p.expected_seq_no())
+        };
         // DirectExact codec mode requires the payload to start with a source
         // kind tag byte (1=text, 2=json, 3=binary, 4=image) followed by the
         // exact bytes. Prepend SourceKind::Binary so the receiver's
@@ -52,7 +56,7 @@ impl PulzzSession {
                 version: shared_protocol::PROTOCOL_VERSION,
                 stream_id,
                 epoch_id: shared_protocol::EpochId(0),
-                seq_no: shared_protocol::SeqNo(0),
+                seq_no,
                 record_type: shared_protocol::RecordType::ExactState,
                 codec_mode: shared_protocol::CodecMode::DirectExact,
                 flags: shared_protocol::RecordFlags::empty(),
